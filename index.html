@@ -1,0 +1,395 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OPD Campaign CRM</title>
+<style>
+*{box-sizing:border-box}
+:root{
+  --navy:#12264a;
+  --navy-2:#19335e;
+  --teal:#21a89b;
+  --teal-dark:#138f86;
+  --teal-soft:#e9f8f6;
+  --text:#1d2b45;
+  --muted:#65748d;
+  --border:#d8e1ec;
+  --bg:#f4f8fa;
+  --white:#fff;
+  --shadow:0 24px 70px rgba(18,38,74,.10);
+}
+html,body{margin:0;min-height:100%;font-family:Inter,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:var(--bg);color:var(--text)}
+button,input,select,textarea{font:inherit}
+button{cursor:pointer}
+.hidden{display:none!important}
+
+.center{min-height:100vh;display:grid;place-items:center;padding:0}
+.screen{min-height:100vh}
+.login-card{
+  width:min(440px,calc(100vw - 34px));
+  background:rgba(255,255,255,.96);
+  border:1px solid rgba(255,255,255,.8);
+  border-radius:24px;
+  padding:38px;
+  box-shadow:var(--shadow);
+  backdrop-filter:blur(12px);
+}
+.login-card:before{
+  content:"";
+  display:block;
+  width:52px;
+  height:52px;
+  border-radius:16px;
+  margin-bottom:20px;
+  background:linear-gradient(135deg,#2bb8aa,#0c8f86);
+  box-shadow:0 10px 22px rgba(33,168,155,.20);
+}
+.brand{
+  font-size:22px;
+  font-weight:800;
+  letter-spacing:-.5px;
+  margin-bottom:8px;
+  color:var(--navy);
+}
+.brand span{color:var(--teal)}
+.login-card h1{
+  font-size:30px;
+  line-height:1.15;
+  letter-spacing:-.7px;
+  margin:12px 0 7px;
+  color:var(--navy);
+}
+.login-card form{display:grid;gap:16px;margin-top:25px}
+label{display:grid;gap:7px;font-size:13px;font-weight:650;color:var(--navy)}
+input,select,textarea{
+  width:100%;
+  border:1px solid var(--border);
+  border-radius:12px;
+  padding:12px 13px;
+  background:#fff;
+  color:var(--text);
+  transition:border-color .18s,box-shadow .18s,transform .18s;
+}
+input::placeholder,textarea::placeholder{color:#96a3b5}
+input:focus,select:focus,textarea:focus{
+  outline:0;
+  border-color:#75c9c1;
+  box-shadow:0 0 0 4px rgba(33,168,155,.11);
+}
+textarea{min-height:90px}
+.btn{
+  border:0;
+  border-radius:11px;
+  padding:11px 15px;
+  font-weight:700;
+  transition:transform .15s,box-shadow .15s,background .15s;
+}
+.btn:hover{transform:translateY(-1px)}
+.btn.primary{
+  background:linear-gradient(135deg,var(--teal),var(--teal-dark));
+  color:#fff;
+  box-shadow:0 10px 24px rgba(33,168,155,.20);
+}
+.btn.primary:hover{box-shadow:0 14px 28px rgba(33,168,155,.26)}
+.btn.secondary{background:#edf3f7;color:#334b68}
+.btn.ghost{background:transparent;color:#cbd5e1;border:1px solid #33445e}
+.error{min-height:18px;color:#b91c1c;font-size:12px}
+.muted{color:var(--muted)}
+.small{font-size:12px}
+.full{width:100%}
+
+#loginView{
+  position:relative;
+  overflow:hidden;
+  background:
+    radial-gradient(circle at 72% 7%,rgba(88,201,190,.15),transparent 26%),
+    radial-gradient(circle at 7% 90%,rgba(93,137,218,.11),transparent 25%),
+    linear-gradient(135deg,#f8fcfd 0%,#eef6f8 100%);
+}
+#loginView:after{
+  content:"";
+  position:absolute;
+  left:50%;
+  bottom:-140px;
+  width:620px;
+  height:270px;
+  border-radius:50% 50% 0 0;
+  background:linear-gradient(135deg,rgba(42,183,171,.78),rgba(24,151,141,.93));
+  transform:translateX(-20%) rotate(-11deg);
+  opacity:.80;
+}
+#loginView .login-card{position:relative;z-index:2}
+
+#app{min-height:100vh;display:flex;background:#f4f7fa}
+aside{
+  position:fixed;
+  inset:0 auto 0 0;
+  width:248px;
+  background:linear-gradient(180deg,#102343 0%,#0d1d37 100%);
+  color:#fff;
+  padding:22px 15px;
+  display:flex;
+  flex-direction:column;
+  box-shadow:10px 0 34px rgba(18,38,74,.08);
+}
+aside .brand{padding:4px 10px 22px;color:#fff}
+aside .brand:after{
+  content:"Campaign lead management";
+  display:block;
+  color:#8292aa;
+  font-size:10px;
+  font-weight:500;
+  letter-spacing:.2px;
+  margin-top:5px;
+}
+aside .brand span{color:#43c4b6}
+nav{display:grid;gap:5px}
+nav button{
+  background:transparent;
+  border:0;
+  color:#b9c6d9;
+  text-align:left;
+  padding:12px 13px;
+  border-radius:10px;
+  font-size:13px;
+  font-weight:600;
+}
+nav button.active,nav button:hover{background:rgba(255,255,255,.08);color:#fff}
+nav button.active{box-shadow:inset 3px 0 0 #39b9ae}
+.bottom{
+  margin-top:auto;
+  display:grid;
+  gap:10px;
+  font-size:12px;
+  color:#cbd5e1;
+  padding:10px;
+}
+main{margin-left:248px;width:calc(100% - 248px)}
+header{
+  height:76px;
+  background:rgba(255,255,255,.92);
+  border-bottom:1px solid #e6ebf0;
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  padding:0 30px;
+  position:sticky;
+  top:0;
+  z-index:10;
+  backdrop-filter:blur(10px);
+}
+.page-title{font-size:21px;font-weight:800;color:var(--navy);letter-spacing:-.3px}
+.content,section#content{padding:28px}
+.grid{display:grid;gap:17px}
+.metrics{grid-template-columns:repeat(4,1fr)}
+.two{grid-template-columns:repeat(2,1fr)}
+.card,.panel{
+  background:rgba(255,255,255,.94);
+  border:1px solid #e5eaf0;
+  border-radius:16px;
+  box-shadow:0 8px 24px rgba(15,23,42,.04);
+}
+.card{padding:20px}
+.panel{padding:20px;margin-top:18px}
+.metric-label{font-size:12px;color:#748196;font-weight:650}
+.metric{font-size:30px;font-weight:850;margin-top:6px;color:var(--navy)}
+.panel-head{
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  margin-bottom:15px
+}
+.section-title{margin:0;font-size:16px;color:var(--navy)}
+.filters{display:flex;gap:9px;flex-wrap:wrap}
+.filters>*{width:auto;min-width:150px}
+.table-wrap{overflow:auto}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th,td{padding:12px 10px;text-align:left;border-bottom:1px solid #edf1f4;white-space:nowrap}
+th{color:#738198;background:#fafbfd;font-weight:700}
+tr:hover td{background:#fcfefe}
+.pill{display:inline-block;padding:5px 9px;border-radius:999px;background:#edf2ff;color:#3f46a4;font-size:11px;font-weight:700}
+.success{background:#eaf9f6;color:#087a6f}
+.warn{background:#fff5e9;color:#b75f0c}
+.danger{background:#fff0f2;color:#b42335}
+.form-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:14px}
+.notice{
+  padding:13px 15px;
+  border-radius:11px;
+  background:#edf9f7;
+  color:#087d73;
+  font-size:13px;
+  border:1px solid #d4f0ec;
+}
+.modal{
+  position:fixed;
+  inset:0;
+  background:rgba(10,25,47,.54);
+  display:grid;
+  place-items:center;
+  padding:20px;
+  z-index:20;
+  backdrop-filter:blur(3px);
+}
+.modal-box{
+  background:#fff;
+  width:min(780px,100%);
+  max-height:90vh;
+  overflow:auto;
+  border-radius:18px;
+  padding:24px;
+  box-shadow:0 30px 80px rgba(12,30,58,.22)
+}
+.modal-actions{display:flex;justify-content:flex-end;gap:9px;margin-top:18px}
+.toast{
+  position:fixed;
+  right:22px;
+  bottom:22px;
+  background:#11233f;
+  color:#fff;
+  padding:12px 16px;
+  border-radius:10px;
+  display:none;
+  z-index:30;
+  box-shadow:0 12px 30px rgba(12,30,58,.20)
+}
+.timeline{border-left:2px solid #d9e6e7;padding-left:15px;margin-top:13px}
+.timeline-item{margin-bottom:17px}
+.timeline-time{font-size:11px;color:#93a0b2}
+.empty{text-align:center;padding:30px;color:#718096}
+@media(max-width:900px){
+  .metrics{grid-template-columns:repeat(2,1fr)}
+  .two{grid-template-columns:1fr}
+  aside{width:210px}
+  main{margin-left:210px;width:calc(100% - 210px)}
+}
+@media(max-width:680px){
+  #app{display:block}
+  aside{position:static;width:100%;min-height:auto}
+  main{margin:0;width:100%}
+  header{padding:0 16px}
+  .content,section#content{padding:16px}
+  .metrics,.form-grid{grid-template-columns:1fr}
+  .bottom{display:none}
+  nav{display:flex;overflow:auto}
+  nav button{white-space:nowrap}
+  .filters>*{width:100%}
+  .login-card{padding:28px 22px}
+}
+
+</style>
+</head>
+<body>
+<div id="login" class="center screen">
+  <div class="login-card">
+    <div class="brand">OPD <span>Campaign CRM</span></div>
+    <h1>Welcome Back</h1>
+    <p class="muted">Sign in to your OPD Campaign CRM</p>
+    <form id="loginForm">
+      <label>Email<input id="email" type="email" required placeholder="Enter your email"></label>
+      <label>Password<input id="password" type="password" required placeholder="Enter your password"></label>
+      <button class="btn primary full" type="submit">Sign in →</button>
+      <div id="loginError" class="error"></div>
+    </form>
+  </div>
+</div>
+<div id="app" class="hidden">
+  <aside>
+    <div class="brand">OPD <span>CRM</span></div>
+    <nav id="nav"></nav>
+    <div class="bottom"><div id="userInfo"></div><button id="logout" class="btn ghost">Sign out</button></div>
+  </aside>
+  <main>
+    <header><div><b id="title">Dashboard</b><div id="subtitle" class="muted small"></div></div><div id="actions"></div></header>
+    <section id="content"></section>
+  </main>
+</div>
+<div id="modal" class="modal hidden"></div>
+<div id="toast" class="toast"></div>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script>
+window.SUPABASE_CONFIG = {
+  url: "https://tnijwzdckrdfxgjwcpii.supabase.co",
+  anonKey: "PASTE_YOUR_SUPABASE_PUBLISHABLE_OR_ANON_KEY_HERE",
+  googleSyncUrl: "PASTE_YOUR_GOOGLE_APPS_SCRIPT_WEB_APP_URL_HERE"
+};
+</script>
+<script>
+const {createClient}=supabase;
+const C=window.SUPABASE_CONFIG||{};
+const db=createClient(C.url,C.anonKey);
+const GOOGLE_SYNC_URL=C.googleSyncUrl||'';
+const STATUS={not_called:'Not Called',connected:'Connected',dnp:'DNP',busy:'Busy',switched_off:'Switched Off',wrong_number:'Wrong Number',interested:'Interested',not_interested:'Not Interested',follow_up:'Follow-up',opd_booked:'OPD Booked',call_back:'Call Back Requested'};
+const OPD={not_discussed:'Not Discussed',interested:'Interested',opd_recommended:'OPD Recommended',opd_booked:'OPD Booked',opd_completed:'OPD Completed',no_show:'No Show',cancelled:'Cancelled'};
+let session=null,me=null,dbstate={campaigns:[],sources:[],callers:[],leads:[],sheetConnections:[]};
+const $=x=>document.getElementById(x),esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const date=x=>x?new Date(x+'T00:00:00').toLocaleDateString('en-IN',{day:'2-digit',month:'short',year:'numeric'}):'';
+const dt=x=>x?new Date(x).toLocaleString('en-IN',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'}):'';
+const toast=m=>{let t=$('toast');t.textContent=m;t.style.display='block';setTimeout(()=>t.style.display='none',2200)};
+const pill=s=>`<span class="pill ${['connected','opd_booked'].includes(s)?'success':s==='dnp'||s==='wrong_number'||s==='not_interested'?'danger':s==='follow_up'||s==='interested'?'warn':''}">${esc(STATUS[s]||s)}</span>`;
+async function start(){if(!C.url||C.url.includes('YOUR_PROJECT')){ $('login').innerHTML='<div class="login-card"><div class="brand">OPD <span>Campaign CRM</span></div><h1>Configure Supabase</h1><p class="muted">Edit the <b>SUPABASE_CONFIG</b> block near the top of this file with your project URL and Publishable/anon key.</p><div class="notice">Never use a sb_secret or service-role key in this GitHub site.</div></div>';return}const s=await db.auth.getSession();session=s.data.session;if(session){await loadMe();await loadAll();showApp()}else $('login').classList.remove('hidden')}
+async function loadMe(){const r=await db.from('profiles').select('*').eq('id',session.user.id).single();if(r.error)throw r.error;me=r.data}
+async function loadAll(){let qs=[db.from('campaigns').select('*').order('campaign_date',{ascending:false}),db.from('lead_sources').select('*').eq('is_active',true).order('name'),db.from('profiles').select('*').eq('is_active',true).order('full_name')];if(me.role==='admin')qs.push(db.from('sheet_connections').select('*, source:lead_sources(name), campaign:campaigns(name,campaign_date)').order('created_at',{ascending:false}));let r=await Promise.all(qs);dbstate.campaigns=r[0].data||[];dbstate.sources=r[1].data||[];dbstate.callers=(r[2].data||[]).filter(x=>x.role==='caller');dbstate.sheetConnections=(me.role==='admin'?(r[3]?.data||[]):[]);await loadLeads()}
+async function loadLeads(){let q=db.from('leads').select('*, campaign:campaigns(name,campaign_date), source:lead_sources(name), assignee:profiles!leads_assigned_to_fkey(full_name)');if(me.role!=='admin')q=q.eq('assigned_to',me.id);let r=await q.order('created_at',{ascending:false}).limit(5000);if(r.error)throw r.error;dbstate.leads=r.data||[]}
+function showApp(){$('login').classList.add('hidden');$('app').classList.remove('hidden');$('userInfo').textContent=`${me.full_name} · ${me.role}`;buildNav();go('dashboard')}
+function buildNav(){let all=[['dashboard','📊 Dashboard'],['leads','📋 Leads'],['campaigns','📅 Campaigns'],['import','📥 Import'],['sheets','🔗 Google Sheets'],['export','📤 Export'],['users','👥 Users']];$('nav').innerHTML=all.filter(x=>me.role==='admin'||['dashboard','leads','export'].includes(x[0])).map(x=>`<button data-page="${x[0]}">${x[1]}</button>`).join('');document.querySelectorAll('#nav button').forEach(b=>b.onclick=()=>go(b.dataset.page))}
+function go(p){document.querySelectorAll('#nav button').forEach(b=>b.classList.toggle('active',b.dataset.page===p));let meta={dashboard:['Dashboard','Campaign and calling performance'],leads:['Leads','Work your calling queue'],campaigns:['Campaigns','Create and manage weekend campaigns'],import:['Import','Bring leads into a campaign'],sheets:['Google Sheets','Connect live lead sources'],export:['Export','Download filtered lead data'],users:['Users','Manage CRM access']}[p];$('title').textContent=meta[0];$('subtitle').textContent=meta[1];$('actions').innerHTML='';({dashboard:renderDash,leads:renderLeads,campaigns:renderCampaigns,import:renderImport,sheets:renderSheets,export:renderExport,users:renderUsers}[p]||renderDash)()}
+function renderDash(){let l=dbstate.leads,n=l.length;let m=[['Total Leads',n],['Assigned',l.filter(x=>x.assigned_to).length],['Called',l.filter(x=>x.calling_status!=='not_called').length],['Pending',l.filter(x=>x.calling_status==='not_called').length],['Connected',l.filter(x=>x.calling_status==='connected').length],['DNP',l.filter(x=>x.calling_status==='dnp').length],['Follow-up',l.filter(x=>x.calling_status==='follow_up').length],['OPD Booked',l.filter(x=>x.opd_status==='opd_booked').length]];$('content').innerHTML=`<div class="notice">${dbstate.campaigns[0]?`Latest campaign: <b>${esc(dbstate.campaigns[0].name)}</b> · ${date(dbstate.campaigns[0].campaign_date)}`:'Create your first weekend campaign from Campaigns.'}</div><div class="grid metrics" style="margin-top:17px">${m.map(x=>`<div class="card"><div class="metric-label">${x[0]}</div><div class="metric">${x[1]}</div></div>`).join('')}</div><div class="grid two"><div class="panel"><div class="panel-head"><b>Caller Performance</b></div>${me.role==='admin'?callerPerf():myPerf()}</div><div class="panel"><div class="panel-head"><b>Lead Sources</b></div>${sourcePerf()}</div></div>`}
+function callerPerf(){return `<div class="table-wrap"><table><thead><tr><th>Caller</th><th>Assigned</th><th>Called</th><th>Connected</th><th>OPD</th></tr></thead><tbody>${dbstate.callers.map(u=>{let x=dbstate.leads.filter(l=>l.assigned_to===u.id);return `<tr><td>${esc(u.full_name)}</td><td>${x.length}</td><td>${x.filter(l=>l.calling_status!=='not_called').length}</td><td>${x.filter(l=>l.calling_status==='connected').length}</td><td>${x.filter(l=>l.opd_status==='opd_booked').length}</td></tr>`}).join('')}</tbody></table></div>`}
+function myPerf(){let l=dbstate.leads;return [['My Leads',l.length],['Pending',l.filter(x=>x.calling_status==='not_called').length],['Follow-ups',l.filter(x=>x.calling_status==='follow_up').length],['OPD Booked',l.filter(x=>x.opd_status==='opd_booked').length]].map(x=>`<div style="display:flex;justify-content:space-between;margin:12px 0;font-size:13px"><span>${x[0]}</span><b>${x[1]}</b></div>`).join('')}
+function sourcePerf(){return `<div class="table-wrap"><table><thead><tr><th>Source</th><th>Leads</th><th>Called</th><th>OPD</th></tr></thead><tbody>${dbstate.sources.map(s=>{let x=dbstate.leads.filter(l=>l.source_id===s.id);return `<tr><td>${esc(s.name)}</td><td>${x.length}</td><td>${x.filter(l=>l.calling_status!=='not_called').length}</td><td>${x.filter(l=>l.opd_status==='opd_booked').length}</td></tr>`}).join('')}</tbody></table></div>`}
+function renderLeads(){$('content').innerHTML=`<div class="panel" style="margin-top:0"><div class="filters"><input id="q" placeholder="Search name / phone"><select id="fc"><option value="">All campaigns</option>${dbstate.campaigns.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select><select id="fs"><option value="">All sources</option>${dbstate.sources.map(s=>`<option value="${s.id}">${esc(s.name)}</option>`).join('')}</select><select id="fst"><option value="">All statuses</option>${Object.entries(STATUS).map(([k,v])=>`<option value="${k}">${v}</option>`).join('')}</select></div></div><div class="panel"><div id="leadTable"></div></div>`;['q','fc','fs','fst'].forEach(id=>$(id).addEventListener('input',updateLeads));updateLeads()}
+function updateLeads(){let q=($('q')?.value||'').toLowerCase(),c=$('fc')?.value,s=$('fs')?.value,st=$('fst')?.value;let x=dbstate.leads.filter(l=>(!q||(l.patient_name+' '+l.phone).toLowerCase().includes(q))&&(!c||l.campaign_id===c)&&(!s||l.source_id===s)&&(!st||l.calling_status===st));$('leadTable').innerHTML=x.length?`<div class="table-wrap"><table><thead><tr><th>Patient</th><th>Phone</th><th>Source</th><th>Campaign</th><th>Assigned</th><th>Status</th><th>OPD</th><th></th></tr></thead><tbody>${x.map(l=>`<tr><td><b>${esc(l.patient_name)}</b><br><span class="small muted">#${l.lead_number}</span></td><td>${esc(l.phone)}</td><td>${esc(l.source?.name)}</td><td>${esc(l.campaign?.name)}</td><td>${esc(l.assignee?.full_name||'Unassigned')}</td><td>${pill(l.calling_status)}</td><td>${esc(OPD[l.opd_status])}</td><td><button class="btn secondary" data-open="${l.id}">Open</button></td></tr>`).join('')}</tbody></table></div>`:'<div class="empty">No leads match the filters.</div>';document.querySelectorAll('[data-open]').forEach(b=>b.onclick=()=>openLead(b.dataset.open))}
+async function openLead(id){let l=dbstate.leads.find(x=>x.id===id);if(!l)return;let logs=(await db.from('call_logs').select('*, caller:profiles(full_name)').eq('lead_id',id).order('called_at',{ascending:false})).data||[];$('modal').innerHTML=`<div class="modal-box"><div class="panel-head"><div><h2 style="margin:0">${esc(l.patient_name)}</h2><div class="small muted">#${l.lead_number} · ${esc(l.phone)}</div></div><button class="btn secondary" id="closeM">Close</button></div><div class="form-grid"><label>Calling Status<select id="s">${Object.entries(STATUS).map(([k,v])=>`<option value="${k}" ${l.calling_status===k?'selected':''}>${v}</option>`).join('')}</select></label><label>OPD Status<select id="o">${Object.entries(OPD).map(([k,v])=>`<option value="${k}" ${l.opd_status===k?'selected':''}>${v}</option>`).join('')}</select></label><label>Follow-up Date<input id="fd" type="date" value="${l.follow_up_date||''}"></label><label>Follow-up Time<input id="ft" type="time" value="${l.follow_up_time||''}"></label>${me.role==='admin'?`<label>Assigned To<select id="a"><option value="">Unassigned</option>${dbstate.callers.map(u=>`<option value="${u.id}" ${l.assigned_to===u.id?'selected':''}>${esc(u.full_name)}</option>`).join('')}</select></label>`:''}<label>Remarks<input id="r" value="${esc(l.remarks||'')}"></label></div><div class="modal-actions"><button class="btn primary" id="save">Save</button></div><div style="font-weight:700;font-size:13px;margin-top:18px">Call Timeline</div><div class="timeline">${logs.length?logs.map(x=>`<div class="timeline-item"><div class="timeline-time">${dt(x.called_at)} · ${esc(x.caller?.full_name)}</div><div><b>${esc(STATUS[x.calling_status])}</b>${x.remarks?' — '+esc(x.remarks):''}</div></div>`).join(''):'<span class="muted small">No calls logged yet.</span>'}</div></div>`;$('modal').classList.remove('hidden');$('closeM').onclick=()=>closeModal();$('save').onclick=()=>saveLead(l)}
+function closeModal(){$('modal').classList.add('hidden')}
+async function saveLead(l){let patch={calling_status:$('s').value,opd_status:$('o').value,follow_up_date:$('fd').value||null,follow_up_time:$('ft').value||null,remarks:$('r').value||null,updated_at:new Date().toISOString()};if(me.role==='admin')patch.assigned_to=$('a').value||null;let u=await db.from('leads').update(patch).eq('id',l.id);if(u.error)return toast(u.error.message);await db.from('call_logs').insert({lead_id:l.id,caller_id:me.id,calling_status:patch.calling_status,remarks:patch.remarks});if(patch.calling_status==='follow_up')await db.from('follow_ups').insert({lead_id:l.id,assigned_to:patch.assigned_to||l.assigned_to||me.id,follow_up_date:patch.follow_up_date||new Date().toISOString().slice(0,10),follow_up_time:patch.follow_up_time,notes:patch.remarks});if(patch.opd_status==='opd_booked'){let q=await db.from('opd_bookings').select('id').eq('lead_id',l.id).limit(1);if(!q.data?.length)await db.from('opd_bookings').insert({lead_id:l.id,created_by:me.id,booking_status:'booked'})}await loadLeads();closeModal();renderLeads();renderDash();toast('Lead updated')}
+function renderCampaigns(){if(me.role!=='admin')return;$('actions').innerHTML='<button class="btn primary" id="newC">+ New Campaign</button>';$('content').innerHTML=`<div class="panel" style="margin-top:0"><div class="table-wrap"><table><thead><tr><th>Campaign</th><th>Date</th><th>Status</th><th>Coupon Code</th><th>Leads</th><th>Assigned</th><th>OPD</th><th>Action</th></tr></thead><tbody>${dbstate.campaigns.map(c=>{let x=dbstate.leads.filter(l=>l.campaign_id===c.id);return `<tr><td><b>${esc(c.name)}</b>${c.location?`<br><span class="small muted">${esc(c.location)}</span>`:''}</td><td>${date(c.campaign_date)}</td><td>${esc(c.status)}</td><td>${c.coupon_code?`<span class="pill">${esc(c.coupon_code)}</span>`:'—'}</td><td>${x.length}</td><td>${x.filter(l=>l.assigned_to).length}</td><td>${x.filter(l=>l.opd_status==='opd_booked').length}</td><td><button class="btn secondary" data-edit-campaign="${c.id}">Edit</button></td></tr>`}).join('')}</tbody></table></div></div>`;$('newC').onclick=()=>openCampaign();document.querySelectorAll('[data-edit-campaign]').forEach(b=>b.onclick=()=>openCampaign(b.dataset.editCampaign))}
+function openCampaign(id){let existing=id?dbstate.campaigns.find(c=>c.id===id):null;let title=existing?'Edit Campaign':'Create Campaign';$('modal').innerHTML=`<div class="modal-box"><div class="panel-head"><h2 style="margin:0">${title}</h2><button class="btn secondary" id="cx">Close</button></div><div class="form-grid"><label>Campaign Name<input id="cn" placeholder="BALA X Camp" value="${esc(existing?.name||'')}"></label><label>Campaign Date<input id="cd" type="date" value="${esc(existing?.campaign_date||'')}"></label><label>Status<select id="cs"><option value="active" ${existing?.status==='active'?'selected':''}>Active</option><option value="draft" ${existing?.status==='draft'?'selected':''}>Draft</option><option value="completed" ${existing?.status==='completed'?'selected':''}>Completed</option></select></label><label>Location<input id="cl" value="${esc(existing?.location||'')}"></label><label>Coupon Code<input id="cco" placeholder="e.g. ORTHO500" value="${esc(existing?.coupon_code||'')}"></label></div><label style="margin-top:14px">Notes<textarea id="cno">${esc(existing?.notes||'')}</textarea></label><div class="modal-actions"><button class="btn primary" id="cgo">${existing?'Save Changes':'Create'}</button></div></div>`;$('modal').classList.remove('hidden');$('cx').onclick=closeModal;$('cgo').onclick=async()=>{let p={name:$('cn').value.trim(),campaign_date:$('cd').value,status:$('cs').value,location:$('cl').value,notes:$('cno').value,coupon_code:$('cco').value.trim()||null};if(!p.name||!p.campaign_date)return toast('Campaign name and date are required');let r=existing?await db.from('campaigns').update(p).eq('id',existing.id):await db.from('campaigns').insert({...p,created_by:me.id});if(r.error)return toast(r.error.message);await loadAll();closeModal();renderCampaigns();toast(existing?'Campaign updated':'Campaign created')}}
+function renderImport(){if(me.role!=='admin')return;$('content').innerHTML=`<div class="panel" style="margin-top:0"><div class="notice">CSV import is still available for one-off files. For live Meta / WhatsApp CTA / RCS / Hospital streams, use <b>Google Sheets</b> in the menu.</div><div class="modal-actions"><button class="btn primary" onclick="go('sheets')">Connect Google Sheet</button></div></div>`}
+function csvRows(t){let out=[],row=[],cell='',q=false;for(let i=0;i<t.length;i++){let ch=t[i],nx=t[i+1];if(ch==='"'&&nx==='"'){cell+='"';i++;continue}if(ch==='"'){q=!q;continue}if(ch===','&&!q){row.push(cell);cell='';continue}if((ch==='\n'||ch==='\r')&&!q){if(ch==='\r'&&nx==='\n')i++;row.push(cell);if(row.some(v=>v.trim()))out.push(row);row=[];cell='';continue}cell+=ch}if(cell||row.length){row.push(cell);out.push(row)}return out}
+async function importCSV(){let f=$('if').files[0],campaign_id=$('ic').value,source_id=$('is').value;if(!f||!campaign_id||!source_id)return toast('Choose campaign, source and CSV');let rows=csvRows(await f.text()),head=rows.shift().map(x=>x.trim().toLowerCase()),ni=head.indexOf('patient_name')>=0?head.indexOf('patient_name'):head.indexOf('name'),pi=head.indexOf('phone')>=0?head.indexOf('phone'):head.indexOf('mobile');if(ni<0||pi<0)return toast('CSV needs name and phone');let existing=new Set(dbstate.leads.map(l=>String(l.phone).replace(/\D/g,'').slice(-10))),ids=dbstate.callers.map(x=>x.id),added=0,dup=0,ci=0;for(let row of rows){let name=(row[ni]||'').trim(),phone=(row[pi]||'').replace(/\D/g,'');if(!name||!phone)continue;let key=phone.slice(-10);if(existing.has(key)){dup++;continue}existing.add(key);let assigned=$('ia').value==='round'?(ids[ci++%ids.length]||null):null;let r=await db.from('leads').insert({patient_name:name,phone,source_id,campaign_id,assigned_to:assigned});if(!r.error)added++}await loadLeads();toast(`Imported ${added} · duplicates skipped ${dup}`)}
+function renderSheets(){if(me.role!=='admin')return;
+  let rows=dbstate.sheetConnections||[];
+  $('actions').innerHTML='<button class="btn primary" id="addSheet">+ Connect Google Sheet</button>';
+  $('content').innerHTML=`<div class="panel" style="margin-top:0"><div class="panel-head"><div><b>Live Google Sheet Connections</b><div class="small muted" style="margin-top:4px">Connect each live source once. New rows are synced to Supabase automatically and assigned round-robin to your callers.</div></div></div>
+  <div class="table-wrap"><table><thead><tr><th>Sheet</th><th>Source</th><th>Campaign</th><th>Last Sync</th><th>Rows</th><th>Status</th></tr></thead><tbody>
+  ${rows.length?rows.map(x=>`<tr><td><b>${esc(x.name||x.sheet_url)}</b><br><span class="small muted">${esc(x.tab_name||'')}</span></td><td>${esc(x.source?.name||'')}</td><td>${esc(x.campaign?.name||'')}</td><td>${x.last_sync_at?dt(x.last_sync_at):'Never'}</td><td>${x.last_processed_row||1}</td><td>${x.last_sync_status==='error'?'<span class="pill danger">Error</span>':'<span class="pill success">Active</span>'}</td></tr>`).join(''):`<tr><td colspan="6" class="empty">No Google Sheets connected yet.</td></tr>`}
+  </tbody></table></div></div>
+  <div class="panel"><div class="notice"><b>Recommended setup:</b> connect Meta Leads, WhatsApp CTA, RCS and Hospital Dump as separate connections. Each connection can point to a different tab and campaign. The sync worker checks active connections automatically.</div></div>`;
+  $('addSheet').onclick=openSheetConnection;
+}
+function openSheetConnection(){
+  if(!GOOGLE_SYNC_URL)return toast('Set googleSyncUrl in the SUPABASE_CONFIG block first');
+  $('modal').innerHTML=`<div class="modal-box"><div class="panel-head"><div><h2 style="margin:0">Connect Google Sheet</h2><div class="small muted" style="margin-top:4px">Paste the Sheet URL. No CSV export is required.</div></div><button class="btn secondary" id="scx">Close</button></div>
+  <div class="form-grid">
+    <label>Connection Name<input id="scn" placeholder="Meta Leads - Sunday Camp"></label>
+    <label>Google Sheet URL<input id="scurl" placeholder="https://docs.google.com/spreadsheets/d/.../edit"></label>
+    <label>Sheet tab<input id="sctab" value="Sheet1" placeholder="Sheet1"></label>
+    <label>Lead Source<select id="scsrc"><option value="">Select source</option>${dbstate.sources.map(x=>`<option value="${x.id}">${esc(x.name)}</option>`).join('')}</select></label>
+    <label>Campaign<select id="sccamp"><option value="">Select campaign</option>${dbstate.campaigns.map(x=>`<option value="${x.id}">${esc(x.name)}</option>`).join('')}</select></label>
+    <label>Patient name column <span class="small muted">optional</span><input id="scname" placeholder="name / patient_name"></label>
+    <label>Phone column <span class="small muted">optional</span><input id="scphone" placeholder="phone / mobile"></label>
+  </div>
+  <div class="notice" style="margin-top:16px">The sync script uses your Google account's access to read the Sheet. Keep row 1 as headers and append new leads below the existing data.</div>
+  <div class="modal-actions"><button class="btn primary" id="scsave">Connect Sheet</button></div></div>`;
+  $('modal').classList.remove('hidden');$('scx').onclick=closeModal;$('scsave').onclick=saveSheetConnection;
+}
+async function saveSheetConnection(){
+  let p={name:$('scn').value.trim()||'Google Sheet',sheet_url:$('scurl').value.trim(),tab_name:$('sctab').value.trim()||'Sheet1',source_id:$('scsrc').value,campaign_id:$('sccamp').value,name_column:$('scname').value.trim()||null,phone_column:$('scphone').value.trim()||null,created_by:me.id,active:true};
+  if(!p.sheet_url||!p.source_id||!p.campaign_id)return toast('Sheet URL, source and campaign are required');
+  let r=await db.from('sheet_connections').insert(p).select().single();if(r.error)return toast(r.error.message);
+  await loadAll();closeModal();renderSheets();toast('Google Sheet connected. New leads will sync automatically')
+}
+async function syncSheetNow(id){if(!GOOGLE_SYNC_URL)return toast('Set googleSyncUrl first');try{let r=await fetch(GOOGLE_SYNC_URL,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'sync',connection_id:id})});let t=await r.text();let j={};try{j=JSON.parse(t)}catch(_){};toast(j.message||'Sync requested');setTimeout(async()=>{await loadAll();renderSheets()},1500)}catch(e){toast('Sync request failed')}}
+function renderExport(){if(me.role!=='admin'){ $('content').innerHTML='<div class="notice">Export is available to Admin only.</div>';return}$('content').innerHTML=`<div class="panel" style="margin-top:0"><div class="form-grid"><label>Campaign<select id="ec"><option value="">All campaigns</option>${dbstate.campaigns.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select></label><label>Source<select id="es"><option value="">All sources</option>${dbstate.sources.map(s=>`<option value="${s.id}">${esc(s.name)}</option>`).join('')}</select></label><label>Assigned To<select id="ea"><option value="">All callers</option>${dbstate.callers.map(u=>`<option value="${u.id}">${esc(u.full_name)}</option>`).join('')}</select></label><label>Status<select id="est"><option value="">All statuses</option>${Object.entries(STATUS).map(([k,v])=>`<option value="${k}">${v}</option>`).join('')}</select></label></div><div class="modal-actions"><button class="btn secondary" id="ep">Preview Count</button><button class="btn primary" id="ex">Export CSV</button></div><div id="ecount" style="margin-top:14px"></div></div>`;$('ep').onclick=previewExport;$('ex').onclick=doExport}
+function filtered(){let c=$('ec').value,s=$('es').value,a=$('ea').value,st=$('est').value;return dbstate.leads.filter(l=>(!c||l.campaign_id===c)&&(!s||l.source_id===s)&&(!a||l.assigned_to===a)&&(!st||l.calling_status===st))}
+function previewExport(){$('ecount').innerHTML=`<div class="notice">${filtered().length} leads match the selected filters.</div>`}
+function doExport(){let x=filtered();if(!x.length)return toast('No leads match');let rows=[['Lead #','Patient Name','Phone','Source','Campaign','Campaign Date','Assigned To','Calling Status','Follow-up Date','OPD Status','Remarks'],...x.map(l=>[l.lead_number,l.patient_name,l.phone,l.source?.name,l.campaign?.name,l.campaign?.campaign_date,l.assignee?.full_name||'',STATUS[l.calling_status],l.follow_up_date,OPD[l.opd_status],l.remarks||''])];let csv=rows.map(r=>r.map(v=>`"${String(v??'').replaceAll('"','""')}"`).join(',')).join('\n');let a=document.createElement('a');a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));a.download='OPD_CRM_Export.csv';a.click();toast(`Exported ${x.length} leads`)}
+function renderUsers(){if(me.role!=='admin')return;$('content').innerHTML=`<div class="panel" style="margin-top:0"><div class="notice">Create users under Supabase Authentication → Users. The schema trigger creates their profile. Promote one profile to Admin using the SQL comment in <b>supabase/schema.sql</b>.</div><div class="table-wrap" style="margin-top:16px"><table><thead><tr><th>Name</th><th>Role</th><th>Status</th></tr></thead><tbody>${[me,...dbstate.callers.filter(x=>x.id!==me.id)].map(u=>`<tr><td>${esc(u.full_name)}</td><td>${esc(u.role)}</td><td>${u.is_active?'Active':'Disabled'}</td></tr>`).join('')}</tbody></table></div></div>`}
+$('loginForm').addEventListener('submit',async e=>{e.preventDefault();$('loginError').textContent='';let r=await db.auth.signInWithPassword({email:$('email').value,password:$('password').value});if(r.error){$('loginError').textContent=r.error.message;return}session=r.data.session;await loadMe();await loadAll();showApp()});
+$('logout').onclick=async()=>{await db.auth.signOut();location.reload()};
+start().catch(e=>{console.error(e);$('loginError').textContent=e.message||'Unable to start CRM'});
+
+</script>
+</body>
+</html>
