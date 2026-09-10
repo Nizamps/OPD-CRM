@@ -330,7 +330,20 @@ const pill=s=>`<span class="pill ${['connected','opd_booked'].includes(s)?'succe
 async function start(){if(!C.url||C.url.includes('YOUR_PROJECT')){ $('login').innerHTML='<div class="login-card"><div class="brand">OPD <span>Campaign CRM</span></div><h1>Configure Supabase</h1><p class="muted">Edit the <b>SUPABASE_CONFIG</b> block near the top of this file with your project URL and Publishable/anon key.</p><div class="notice">Never use a sb_secret or service-role key in this GitHub site.</div></div>';return}const s=await db.auth.getSession();session=s.data.session;if(session){await loadMe();await loadAll();showApp()}else $('login').classList.remove('hidden')}
 async function loadMe(){const r=await db.from('profiles').select('*').eq('id',session.user.id).single();if(r.error)throw r.error;me=r.data}
 async function loadAll(){let qs=[db.from('campaigns').select('*').order('campaign_date',{ascending:false}),db.from('lead_sources').select('*').eq('is_active',true).order('name'),db.from('profiles').select('*').eq('is_active',true).order('full_name')];if(me.role==='admin')qs.push(db.from('sheet_connections').select('*, source:lead_sources(name), campaign:campaigns(name,campaign_date)').order('created_at',{ascending:false}));let r=await Promise.all(qs);dbstate.campaigns=r[0].data||[];dbstate.sources=r[1].data||[];dbstate.callers=(r[2].data||[]).filter(x=>x.role==='caller');dbstate.sheetConnections=(me.role==='admin'?(r[3]?.data||[]):[]);await loadLeads()}
-async function loadLeads(){let q=db.from('leads').select('*, campaign:campaigns(name,campaign_date), source:lead_sources(name), assignee:profiles!leads_assigned_to_fkey(full_name)');if(me.role!=='admin')q=q.eq('assigned_to',me.id);let r=await q.order('created_at',{ascending:false}).limit(5000);if(r.error)throw r.error;dbstate.leads=r.data||[]}
+async function loadLeads(){
+  const pageSize=1000;
+  let all=[];
+  for(let from=0;;from+=pageSize){
+    let q=db.from('leads').select('*, campaign:campaigns(name,campaign_date), source:lead_sources(name), assignee:profiles!leads_assigned_to_fkey(full_name)');
+    if(me.role!=='admin')q=q.eq('assigned_to',me.id);
+    let r=await q.order('created_at',{ascending:false}).order('id',{ascending:false}).range(from,from+pageSize-1);
+    if(r.error)throw r.error;
+    const rows=r.data||[];
+    all.push(...rows);
+    if(rows.length<pageSize)break;
+  }
+  dbstate.leads=all;
+}
 function showApp(){$('login').classList.add('hidden');$('app').classList.remove('hidden');$('userInfo').textContent=`${me.full_name} · ${me.role}`;buildNav();go('dashboard')}
 function buildNav(){let all=[['dashboard','📊 Dashboard'],['leads','📋 Leads'],['campaigns','📅 Campaigns'],['import','📥 Import'],['sheets','🔗 Google Sheets'],['export','📤 Export'],['users','👥 Users']];$('nav').innerHTML=all.filter(x=>me.role==='admin'||['dashboard','leads','export'].includes(x[0])).map(x=>`<button data-page="${x[0]}">${x[1]}</button>`).join('');document.querySelectorAll('#nav button').forEach(b=>b.onclick=()=>go(b.dataset.page))}
 function go(p){document.querySelectorAll('#nav button').forEach(b=>b.classList.toggle('active',b.dataset.page===p));let meta={dashboard:['Dashboard','Campaign and calling performance'],leads:['Leads','Work your calling queue'],campaigns:['Campaigns','Create and manage weekend campaigns'],import:['Import','Bring leads into a campaign'],sheets:['Google Sheets','Connect live lead sources'],export:['Export','Download filtered lead data'],users:['Users','Manage CRM access']}[p];$('title').textContent=meta[0];$('subtitle').textContent=meta[1];$('actions').innerHTML='';({dashboard:renderDash,leads:renderLeads,campaigns:renderCampaigns,import:renderImport,sheets:renderSheets,export:renderExport,users:renderUsers}[p]||renderDash)()}
