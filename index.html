@@ -257,6 +257,14 @@ tr:hover td{background:#fcfefe}
 .timeline-item{margin-bottom:17px}
 .timeline-time{font-size:11px;color:#93a0b2}
 .empty{text-align:center;padding:30px;color:#718096}
+.bulkbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px}
+.bulkbar .count{font-size:12px;color:var(--muted);font-weight:650;margin-right:auto}
+.bulkbar select{width:auto;min-width:160px}
+.pagination{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:14px;flex-wrap:wrap}
+.pagination .pages{display:flex;align-items:center;gap:6px}
+.pagination button{min-width:36px}
+.pagination-info{font-size:12px;color:var(--muted)}
+.row-check{width:18px;height:18px;cursor:pointer}
 @media(max-width:900px){
   .metrics{grid-template-columns:repeat(2,1fr)}
   .two{grid-template-columns:1fr}
@@ -353,12 +361,111 @@ function myPerf(){let l=dbstate.leads;return [['My Leads',l.length],['Pending',l
 function sourcePerf(){return `<div class="table-wrap"><table><thead><tr><th>Source</th><th>Leads</th><th>Called</th><th>OPD</th></tr></thead><tbody>${dbstate.sources.map(s=>{let x=dbstate.leads.filter(l=>l.source_id===s.id);return `<tr><td>${esc(s.name)}</td><td>${x.length}</td><td>${x.filter(l=>l.calling_status!=='not_called').length}</td><td>${x.filter(l=>l.opd_status==='opd_booked').length}</td></tr>`}).join('')}</tbody></table></div>`}
 function renderLeads(){
   $('actions').innerHTML='<button class="btn primary" id="newLead">+ Add New Lead</button>';
-  $('content').innerHTML=`<div class="panel" style="margin-top:0"><div class="filters"><input id="q" placeholder="Search name / phone"><select id="fc"><option value="">All campaigns</option>${dbstate.campaigns.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select><select id="fs"><option value="">All sources</option>${dbstate.sources.map(s=>`<option value="${s.id}">${esc(s.name)}</option>`).join('')}</select><select id="fa"><option value="">All callers</option>${dbstate.callers.map(u=>`<option value="${u.id}">${esc(u.full_name)}</option>`).join('')}</select><select id="fst"><option value="">All calling statuses</option>${Object.entries(STATUS).filter(([k])=>k!=='opd_booked').map(([k,v])=>`<option value="${k}">${v}</option>`).join('')}</select><select id="fopd"><option value="">All OPD statuses</option>${Object.entries(OPD).map(([k,v])=>`<option value="${k}">${v}</option>`).join('')}</select></div></div><div class="panel"><div id="leadCount" class="small muted" style="margin-bottom:12px"></div><div id="leadTable"></div></div>`;
-  ['q','fc','fs','fa','fst','fopd'].forEach(id=>$(id).addEventListener('input',updateLeads));
+  $('content').innerHTML=`<div class="panel" style="margin-top:0"><div class="filters"><input id="q" placeholder="Search name / phone"><select id="fc"><option value="">All campaigns</option>${dbstate.campaigns.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select><select id="fs"><option value="">All sources</option>${dbstate.sources.map(s=>`<option value="${s.id}">${esc(s.name)}</option>`).join('')}</select><select id="fa"><option value="">All callers</option><option value="__unassigned__">Unassigned</option>${dbstate.callers.map(u=>`<option value="${u.id}">${esc(u.full_name)}</option>`).join('')}</select><select id="fst"><option value="">All calling statuses</option>${Object.entries(STATUS).filter(([k])=>k!=='opd_booked').map(([k,v])=>`<option value="${k}">${v}</option>`).join('')}</select><select id="fopd"><option value="">All OPD statuses</option>${Object.entries(OPD).map(([k,v])=>`<option value="${k}">${v}</option>`).join('')}</select></div></div><div class="panel"><div class="bulkbar"><label style="display:flex;align-items:center;gap:8px;width:auto;min-width:0"><input id="selectAllPage" class="row-check" type="checkbox"> Select page</label><span id="selectedCount" class="count">0 selected</span>${me.role==='admin'?`<select id="bulkAssignee"><option value="">Assign selected to...</option><option value="__unassigned__">Unassign selected</option>${dbstate.callers.map(u=>`<option value="${u.id}">${esc(u.full_name)}</option>`).join('')}</select><button class="btn primary" id="bulkAssign">Assign</button>`:''}<label style="display:flex;align-items:center;gap:7px;width:auto;min-width:0">Rows <select id="pageSize"><option value="25">25</option><option value="50">50</option><option value="100" selected>100</option><option value="200">200</option></select></label></div><div id="leadCount" class="small muted" style="margin-bottom:12px"></div><div id="leadTable"></div><div id="pagination"></div></div>`;
+
+  ['q','fc','fs','fa','fst','fopd'].forEach(id=>$(id).addEventListener('input',()=>{leadPage=1;clearLeadSelection();updateLeads()}));
+  $('pageSize').addEventListener('change',()=>{leadPage=1;clearLeadSelection();updateLeads()});
   $('newLead').onclick=()=>openNewLead();
+  $('selectAllPage').addEventListener('change',toggleSelectAllPage);
+  if(me.role==='admin')$('bulkAssign').onclick=bulkAssignSelected;
   updateLeads();
 }
-function updateLeads(){let q=($('q')?.value||'').toLowerCase(),c=$('fc')?.value,s=$('fs')?.value,a=$('fa')?.value,st=$('fst')?.value,opd=$('fopd')?.value;let x=dbstate.leads.filter(l=>(!q||(l.patient_name+' '+l.phone).toLowerCase().includes(q))&&(!c||l.campaign_id===c)&&(!s||l.source_id===s)&&(!a||l.assigned_to===a)&&(!st||l.calling_status===st)&&(!opd||l.opd_status===opd));$('leadCount').textContent=`${x.length} lead${x.length===1?'':'s'} found`;$('leadTable').innerHTML=x.length?`<div class="table-wrap"><table><thead><tr><th>Patient</th><th>Phone</th><th>Source</th><th>Campaign</th><th>Assigned</th><th>Status</th><th>OPD</th><th></th></tr></thead><tbody>${x.map(l=>`<tr><td><b>${esc(l.patient_name)}</b><br><span class="small muted">#${l.lead_number}</span></td><td>${esc(l.phone)}</td><td>${esc(l.source?.name)}</td><td>${esc(l.campaign?.name)}</td><td>${esc(l.assignee?.full_name||'Unassigned')}</td><td>${pill(l.calling_status)}</td><td>${esc(OPD[l.opd_status])}</td><td><button class="btn secondary" data-open="${l.id}">Edit</button></td></tr>`).join('')}</tbody></table></div>`:'<div class="empty">No leads match the filters.</div>';document.querySelectorAll('[data-open]').forEach(b=>b.onclick=()=>openLead(b.dataset.open))}
+
+let leadPage=1;
+let leadSelected=new Set();
+
+function clearLeadSelection(){
+  leadSelected.clear();
+  if($('selectAllPage'))$('selectAllPage').checked=false;
+}
+
+function getFilteredLeads(){
+  let q=($('q')?.value||'').toLowerCase(),c=$('fc')?.value,s=$('fs')?.value,a=$('fa')?.value,st=$('fst')?.value,opd=$('fopd')?.value;
+  return dbstate.leads.filter(l=>
+    (!q||(l.patient_name+' '+l.phone).toLowerCase().includes(q)) &&
+    (!c||l.campaign_id===c) &&
+    (!s||l.source_id===s) &&
+    (!a||(a==='__unassigned__'?!l.assigned_to:l.assigned_to===a)) &&
+    (!st||l.calling_status===st) &&
+    (!opd||l.opd_status===opd)
+  );
+}
+
+function updateSelectedCount(){
+  if($('selectedCount'))$('selectedCount').textContent=`${leadSelected.size} selected`;
+}
+
+function toggleLeadSelection(id,checked){
+  if(checked)leadSelected.add(id);else leadSelected.delete(id);
+  updateSelectedCount();
+  syncSelectAllPage();
+}
+
+function toggleSelectAllPage(){
+  let x=getFilteredLeads(),pageSize=Number($('pageSize').value||100),start=(leadPage-1)*pageSize,pageRows=x.slice(start,start+pageSize),checked=$('selectAllPage').checked;
+  pageRows.forEach(l=>checked?leadSelected.add(l.id):leadSelected.delete(l.id));
+  document.querySelectorAll('.lead-row-check').forEach(c=>c.checked=checked);
+  updateSelectedCount();
+}
+
+function syncSelectAllPage(){
+  let x=getFilteredLeads(),pageSize=Number($('pageSize').value||100),start=(leadPage-1)*pageSize,pageRows=x.slice(start,start+pageSize);
+  let all=pageRows.length>0&&pageRows.every(l=>leadSelected.has(l.id));
+  let some=pageRows.some(l=>leadSelected.has(l.id));
+  if($('selectAllPage')){
+    $('selectAllPage').checked=all;
+    $('selectAllPage').indeterminate=!all&&some;
+  }
+}
+
+function renderPagination(total,pageSize){
+  let pages=Math.max(1,Math.ceil(total/pageSize));
+  if(leadPage>pages)leadPage=pages;
+  let start=total?((leadPage-1)*pageSize)+1:0,end=Math.min(leadPage*pageSize,total);
+  let buttons='';
+  for(let p=Math.max(1,leadPage-2);p<=Math.min(pages,leadPage+2);p++)buttons+=`<button class="btn ${p===leadPage?'primary':'secondary'}" data-page="${p}">${p}</button>`;
+  $('pagination').innerHTML=`<div class="pagination"><span class="pagination-info">Showing ${start}-${end} of ${total}</span><div class="pages"><button class="btn secondary" data-page="${leadPage-1}" ${leadPage<=1?'disabled':''}>‹</button>${buttons}<button class="btn secondary" data-page="${leadPage+1}" ${leadPage>=pages?'disabled':''}>›</button></div></div>`;
+  document.querySelectorAll('#pagination [data-page]').forEach(b=>b.onclick=()=>{let p=Number(b.dataset.page);if(p>=1&&p<=pages){leadPage=p;updateLeads()}});
+}
+
+function updateLeads(){
+  let x=getFilteredLeads(),pageSize=Number($('pageSize')?.value||100),pages=Math.max(1,Math.ceil(x.length/pageSize));
+  if(leadPage>pages)leadPage=pages;
+  let start=(leadPage-1)*pageSize,pageRows=x.slice(start,start+pageSize);
+  $('leadCount').textContent=`${x.length} lead${x.length===1?'':'s'} found`;
+  $('leadTable').innerHTML=pageRows.length?`<div class="table-wrap"><table><thead><tr><th><input id="headerSelect" class="row-check" type="checkbox"></th><th>Patient</th><th>Phone</th><th>Source</th><th>Campaign</th><th>Assigned</th><th>Status</th><th>OPD</th><th></th></tr></thead><tbody>${pageRows.map(l=>`<tr><td><input class="row-check lead-row-check" type="checkbox" data-lead-check="${l.id}" ${leadSelected.has(l.id)?'checked':''}></td><td><b>${esc(l.patient_name)}</b><br><span class="small muted">#${l.lead_number}</span></td><td>${esc(l.phone)}</td><td>${esc(l.source?.name||'—')}</td><td>${esc(l.campaign?.name||'—')}</td><td>${esc(l.assignee?.full_name||'Unassigned')}</td><td>${pill(l.calling_status)}</td><td>${esc(OPD[l.opd_status]||l.opd_status||'—')}</td><td><button class="btn secondary" data-open="${l.id}">Edit</button></td></tr>`).join('')}</tbody></table></div>`:'<div class="empty">No leads match the filters.</div>';
+  document.querySelectorAll('[data-open]').forEach(b=>b.onclick=()=>openLead(b.dataset.open));
+  document.querySelectorAll('[data-lead-check]').forEach(b=>b.onchange=()=>toggleLeadSelection(b.dataset.leadCheck,b.checked));
+  let hs=$('headerSelect');
+  if(hs)hs.onchange=()=>{let checked=hs.checked;let x=getFilteredLeads(),ps=Number($('pageSize').value||100),rows=x.slice((leadPage-1)*ps,(leadPage-1)*ps+ps);rows.forEach(l=>checked?leadSelected.add(l.id):leadSelected.delete(l.id));document.querySelectorAll('.lead-row-check').forEach(c=>c.checked=checked);if($('selectAllPage'))$('selectAllPage').checked=checked;updateSelectedCount();};
+  renderPagination(x.length,pageSize);
+  syncSelectAllPage();
+  updateSelectedCount();
+}
+
+async function bulkAssignSelected(){
+  if(me.role!=='admin')return;
+  if(!leadSelected.size)return toast('Select at least one lead');
+  const target=$('bulkAssignee').value;
+  if(!target)return toast('Choose a caller or Unassign selected');
+  const ids=Array.from(leadSelected);
+  const assigned_to=target==='__unassigned__'?null:target;
+  const callerName=target==='__unassigned__'?'Unassigned':(dbstate.callers.find(u=>u.id===target)?.full_name||'caller');
+  if(!confirm(`Assign ${ids.length} lead${ids.length===1?'':'s'} to ${callerName}?`))return;
+  const u=await db.from('leads').update({assigned_to,updated_at:new Date().toISOString()}).in('id',ids);
+  if(u.error)return toast(u.error.message);
+  if(assigned_to){
+    const rows=ids.map(id=>({lead_id:id,assigned_to:assigned_to,assigned_by:me.id}));
+    const ar=await db.from('lead_assignments').insert(rows);
+    if(ar.error)console.warn('Assignment history insert failed:',ar.error);
+  }
+  clearLeadSelection();
+  $('bulkAssignee').value='';
+  await loadAll();
+  updateLeads();
+  toast(`${ids.length} lead${ids.length===1?'':'s'} assigned`);
+}
+
 async function openLead(id){let l=dbstate.leads.find(x=>x.id===id);if(!l)return;let logs=(await db.from('call_logs').select('*, caller:profiles(full_name)').eq('lead_id',id).order('called_at',{ascending:false})).data||[];$('modal').innerHTML=`<div class="modal-box"><div class="panel-head"><div><h2 style="margin:0">Edit Lead</h2><div class="small muted">#${l.lead_number}</div></div><button class="btn secondary" id="closeM">Close</button></div><div class="form-grid"><label>Patient Name<input id="pn" value="${esc(l.patient_name)}"></label><label>Phone<input id="ph" value="${esc(l.phone)}"></label><label>Campaign<select id="c"><option value="">Select campaign</option>${dbstate.campaigns.map(c=>`<option value="${c.id}" ${l.campaign_id===c.id?'selected':''}>${esc(c.name)}</option>`).join('')}</select></label><label>Lead Source<select id="src"><option value="">Select source</option>${dbstate.sources.map(s=>`<option value="${s.id}" ${l.source_id===s.id?'selected':''}>${esc(s.name)}</option>`).join('')}</select></label><label>Hospital<select id="h"><option value="">Select hospital</option><option value="EHRC" ${l.hospital==='EHRC'?'selected':''}>EHRC</option><option value="Altius" ${l.hospital==='Altius'?'selected':''}>Altius</option></select></label><label>Coupon Code<input id="cc" placeholder="Optional coupon code" value="${esc(l.coupon_code||'')}"></label><label>Calling Status<select id="s">${Object.entries(STATUS).map(([k,v])=>`<option value="${k}" ${l.calling_status===k?'selected':''}>${v}</option>`).join('')}</select></label><label>OPD Status<select id="o">${Object.entries(OPD).map(([k,v])=>`<option value="${k}" ${l.opd_status===k?'selected':''}>${v}</option>`).join('')}</select></label><label>Follow-up Date<input id="fd" type="date" value="${l.follow_up_date||''}"></label><label>Follow-up Time<input id="ft" type="time" value="${l.follow_up_time||''}"></label>${me.role==='admin'?`<label>Assigned To<select id="a"><option value="">Unassigned</option>${dbstate.callers.map(u=>`<option value="${u.id}" ${l.assigned_to===u.id?'selected':''}>${esc(u.full_name)}</option>`).join('')}</select></label>`:''}<label>Remarks<input id="r" value="${esc(l.remarks||'')}"></label></div><div class="modal-actions"><button class="btn primary" id="save">Save Changes</button></div><div style="font-weight:700;font-size:13px;margin-top:18px">Call Timeline</div><div class="timeline">${logs.length?logs.map(x=>`<div class="timeline-item"><div class="timeline-time">${dt(x.called_at)} · ${esc(x.caller?.full_name)}</div><div><b>${esc(STATUS[x.calling_status])}</b>${x.remarks?' — '+esc(x.remarks):''}</div></div>`).join(''):'<span class="muted small">No calls logged yet.</span>'}</div></div>`;$('modal').classList.remove('hidden');$('closeM').onclick=()=>closeModal();$('save').onclick=()=>saveLead(l)}
 function openNewLead(){
   $('modal').innerHTML=`<div class="modal-box"><div class="panel-head"><div><h2 style="margin:0">Add New Lead</h2><div class="small muted">Create a lead directly in the CRM.</div></div><button class="btn secondary" id="newClose">Close</button></div><div class="form-grid"><label>Patient Name<input id="npn" placeholder="Patient name"></label><label>Phone<input id="nph" placeholder="Phone number"></label><label>Campaign<select id="nc"><option value="">Select campaign</option>${dbstate.campaigns.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select></label><label>Lead Source<select id="ns"><option value="">Select source</option>${dbstate.sources.map(s=>`<option value="${s.id}">${esc(s.name)}</option>`).join('')}</select></label><label>Hospital<select id="nh"><option value="">Select hospital</option><option value="EHRC">EHRC</option><option value="Altius">Altius</option></select></label><label>Coupon Code<input id="ncc" placeholder="Optional coupon code"></label>${me.role==='admin'?`<label>Assigned To<select id="na"><option value="">Unassigned</option>${dbstate.callers.map(u=>`<option value="${u.id}">${esc(u.full_name)}</option>`).join('')}</select></label>`:''}<label>Calling Status<select id="nst">${Object.entries(STATUS).map(([k,v])=>`<option value="${k}" ${k==='not_called'?'selected':''}>${v}</option>`).join('')}</select></label><label>OPD Status<select id="no">${Object.entries(OPD).map(([k,v])=>`<option value="${k}" ${k==='not_discussed'?'selected':''}>${v}</option>`).join('')}</select></label><label>Follow-up Date<input id="nfd" type="date"></label><label>Follow-up Time<input id="nft" type="time"></label><label>Remarks<input id="nr" placeholder="Optional remarks"></label></div><div class="modal-actions"><button class="btn primary" id="createLead">Add Lead</button></div></div>`;
