@@ -203,6 +203,45 @@ header{
 .section-title{margin:0;font-size:16px;color:var(--navy)}
 .filters{display:flex;gap:9px;flex-wrap:wrap}
 .filters>*{width:auto;min-width:150px}
+.filters.lead-filters{
+  display:grid;
+  grid-template-columns:minmax(220px,1.6fr) minmax(180px,1.2fr) minmax(160px,1fr) minmax(150px,.9fr) minmax(150px,.9fr);
+  gap:14px;
+  align-items:end;
+}
+.filters.lead-filters > *{width:100%;min-width:0}
+.filters.lead-filters label{font-size:12px}
+.filters.lead-filters .filter-group{
+  display:grid;
+  gap:7px;
+  min-width:0;
+}
+.filters.lead-filters .filter-label{
+  font-size:12px;
+  font-weight:700;
+  color:var(--navy);
+}
+.filters.lead-filters .date-group{
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  gap:12px;
+  grid-column:span 2;
+}
+.filters.lead-filters .section-break{
+  grid-column:1/-1;
+  border-top:1px solid #edf1f4;
+  margin-top:2px;
+  padding-top:2px;
+}
+@media(max-width:1200px){
+  .filters.lead-filters{grid-template-columns:repeat(3,1fr)}
+  .filters.lead-filters .date-group{grid-column:span 2}
+}
+@media(max-width:760px){
+  .filters.lead-filters{grid-template-columns:1fr}
+  .filters.lead-filters .date-group{grid-column:auto;grid-template-columns:1fr}
+}
+
 .table-wrap{overflow:auto}
 table{width:100%;border-collapse:collapse;font-size:13px}
 th,td{padding:12px 10px;text-align:left;border-bottom:1px solid #edf1f4;white-space:nowrap}
@@ -361,17 +400,20 @@ function myPerf(){let l=dbstate.leads;return [['My Leads',l.length],['Pending',l
 function sourcePerf(){return `<div class="table-wrap"><table><thead><tr><th>Source</th><th>Leads</th><th>Called</th><th>OPD</th></tr></thead><tbody>${dbstate.sources.map(s=>{let x=dbstate.leads.filter(l=>l.source_id===s.id);return `<tr><td>${esc(s.name)}</td><td>${x.length}</td><td>${x.filter(l=>l.calling_status!=='not_called').length}</td><td>${x.filter(l=>l.opd_status==='opd_booked').length}</td></tr>`}).join('')}</tbody></table></div>`}
 function renderLeads(){
   $('actions').innerHTML='<button class="btn primary" id="newLead">+ Add New Lead</button>';
-  $('content').innerHTML=`<div class="panel" style="margin-top:0"><div class="filters">
-    <input id="q" placeholder="Search name / phone">
-    <select id="fc"><option value="">All campaigns</option>${dbstate.campaigns.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select>
-    <select id="fs"><option value="">All sources</option>${dbstate.sources.map(s=>`<option value="${s.id}">${esc(s.name)}</option>`).join('')}</select>
-    <select id="fh"><option value="">All hospitals</option><option value="EHRC">EHRC</option><option value="Altius">Altius</option></select>
-    <select id="fa"><option value="">All callers</option><option value="__unassigned__">Unassigned</option>${dbstate.callers.map(u=>`<option value="${u.id}">${esc(u.full_name)}</option>`).join('')}</select>
-    <select id="fst"><option value="">All calling statuses</option>${Object.entries(STATUS).filter(([k])=>k!=='opd_booked').map(([k,v])=>`<option value="${k}">${v}</option>`).join('')}</select>
-    <select id="fopd"><option value="">All OPD statuses</option>${Object.entries(OPD).map(([k,v])=>`<option value="${k}">${v}</option>`).join('')}</select>
-    <select id="fvisit"><option value="">All visits</option><option value="Completed">Completed</option><option value="No Show">No Show</option></select>
-    <label style="width:auto;min-width:170px">Calling date from<input id="fcdfrom" type="date"></label>
-    <label style="width:auto;min-width:170px">Calling date to<input id="fcdto" type="date"></label>
+  $('content').innerHTML=`<div class="panel" style="margin-top:0"><div class="filters lead-filters">
+    <div class="filter-group"><span class="filter-label">Search</span><input id="q" placeholder="Search name / phone"></div>
+    <div class="filter-group"><span class="filter-label">Campaign</span><select id="fc"><option value="">All campaigns</option>${dbstate.campaigns.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select></div>
+    <div class="filter-group"><span class="filter-label">Lead Source</span><select id="fs"><option value="">All sources</option>${dbstate.sources.map(s=>`<option value="${s.id}">${esc(s.name)}</option>`).join('')}</select></div>
+    <div class="filter-group"><span class="filter-label">Hospital</span><select id="fh"><option value="">All hospitals</option><option value="EHRC">EHRC</option><option value="Altius">Altius</option></select></div>
+    <div class="filter-group"><span class="filter-label">Caller</span><select id="fa"><option value="">All callers</option><option value="__unassigned__">Unassigned</option>${dbstate.callers.map(u=>`<option value="${u.id}">${esc(u.full_name)}</option>`).join('')}</select></div>
+    <div class="section-break"></div>
+    <div class="filter-group"><span class="filter-label">Calling Status</span><select id="fst"><option value="">All calling statuses</option>${Object.entries(STATUS).filter(([k])=>k!=='opd_booked').map(([k,v])=>`<option value="${k}">${v}</option>`).join('')}</select></div>
+    <div class="filter-group"><span class="filter-label">OPD Status</span><select id="fopd"><option value="">All OPD statuses</option>${Object.entries(OPD).map(([k,v])=>`<option value="${k}">${v}</option>`).join('')}</select></div>
+    <div class="filter-group"><span class="filter-label">Visit</span><select id="fvisit"><option value="">All visits</option><option value="Completed">Completed</option><option value="No Show">No Show</option></select></div>
+    <div class="date-group">
+      <div class="filter-group"><span class="filter-label">Calling Date From</span><input id="fcdfrom" type="date"></div>
+      <div class="filter-group"><span class="filter-label">Calling Date To</span><input id="fcdto" type="date"></div>
+    </div>
   </div></div>
   <div class="panel"><div class="bulkbar">
     <label style="display:flex;align-items:center;gap:8px;width:auto;min-width:0"><input id="selectAllPage" class="row-check" type="checkbox"> Select page</label>
