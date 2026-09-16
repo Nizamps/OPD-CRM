@@ -406,7 +406,7 @@ const $=x=>document.getElementById(x),esc=s=>String(s??'').replace(/[&<>"']/g,c=
 const date=x=>x?new Date(x+'T00:00:00').toLocaleDateString('en-IN',{day:'2-digit',month:'short',year:'numeric'}):'';
 const dt=x=>x?new Date(x).toLocaleString('en-IN',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'}):'';
 const toast=m=>{let t=$('toast');t.textContent=m;t.style.display='block';setTimeout(()=>t.style.display='none',2200)};
-const pill=s=>`<span class="pill ${['connected','opd_booked'].includes(s)?'success':s==='dnp'||s==='wrong_number'||s==='not_interested'?'danger':s==='follow_up'||s==='interested'?'warn':''}">${esc(STATUS[s]||s)}</span>`;
+const pill=s=>`<span class="pill ${['connected','opd_booked'].includes(s)?'success':s==='dnp'||s==='wrong_number'||s==='not_interested'?'danger':s==='follow_up'||s==='interested'?'warn':''}">${esc(settingLabel('calling_status',s,STATUS[s]||s))}</span>`;
 async function start(){
   if(!C.url||C.url.includes('YOUR_PROJECT')){
     $('login').classList.remove('hidden');
@@ -573,9 +573,9 @@ function updateLeads(){
   renderPagination(x.length,ps);syncSelectAllPage();updateSelectedCount();refreshPendingBadge();
 }
 async function bulkAssignSelected(){if(me.role!=='admin')return;if(!leadSelected.size)return toast('Select at least one lead');const target=$('bulkAssignee').value;if(!target)return toast('Choose a caller or Unassign selected');const ids=Array.from(leadSelected),assigned_to=target==='__unassigned__'?null:target,callerName=target==='__unassigned__'?'Unassigned':(dbstate.callers.find(u=>u.id===target)?.full_name||'caller');if(!confirm(`Assign ${ids.length} lead${ids.length===1?'':'s'} to ${callerName}?`))return;const u=await db.from('leads').update({assigned_to,updated_at:new Date().toISOString()}).in('id',ids);if(u.error)return toast(u.error.message);if(assigned_to){const ar=await db.from('lead_assignments').insert(ids.map(id=>({lead_id:id,assigned_to,assigned_by:me.id})));if(ar.error)console.warn('Assignment history insert failed:',ar.error)}clearLeadSelection();$('bulkAssignee').value='';await loadAll();updateLeads();toast(`${ids.length} lead${ids.length===1?'':'s'} assigned`)}
-async function openLead(id){let l=dbstate.leads.find(x=>x.id===id);if(!l)return;let logs=(await db.from('call_logs').select('*, caller:profiles(full_name)').eq('lead_id',id).order('called_at',{ascending:false})).data||[];$('modal').innerHTML=`<div class="modal-box"><div class="panel-head"><div><h2 style="margin:0">Edit Lead</h2><div class="small muted">#${l.lead_number}</div></div><button class="btn secondary" id="closeM">Close</button></div><div class="form-grid"><label>Patient Name<input id="pn" value="${esc(l.patient_name)}"></label><label>Phone<input id="ph" value="${esc(l.phone)}"></label><label>Campaign<select id="c"><option value="">Select campaign</option>${dbstate.campaigns.map(c=>`<option value="${c.id}" ${l.campaign_id===c.id?'selected':''}>${esc(c.name)}</option>`).join('')}</select></label><label>Lead Source<select id="src"><option value="">Select source</option>${dbstate.sources.map(s=>`<option value="${s.id}" ${l.source_id===s.id?'selected':''}>${esc(s.name)}</option>`).join('')}</select></label><label>Hospital<select id="h"><option value="">Select hospital</option>${settingOptions('hospital').length?settingOptions('hospital').map(x=>`<option value="${esc(x.label)}" ${l.hospital===x.label?'selected':''}>${esc(x.label)}</option>`).join(''):'<option value="EHRC" '+(l.hospital==='EHRC'?'selected':'')+'>EHRC</option><option value="Altius" '+(l.hospital==='Altius'?'selected':'')+'>Altius</option>'}</select></label><label>Coupon Code<input id="cc" placeholder="Optional coupon code" value="${esc(l.coupon_code||'')}"></label><label>Calling Status<select id="s">${Object.entries(STATUS).filter(([k])=>k!=='opd_booked').map(([k,v])=>`<option value="${k}" ${l.calling_status===k?'selected':''}>${v}</option>`).join('')}</select></label><label>Calling Date<input id="calld" type="date" value="${l.calling_date||''}"></label><label>OPD Status<select id="o">${Object.entries(OPD).map(([k,v])=>`<option value="${k}" ${l.opd_status===k?'selected':''}>${v}</option>`).join('')}</select></label><label>Visit<select id="v"><option value="">Select visit</option>${(settingOptions('visit').length?settingOptions('visit').map(x=>`<option value="${esc(x.label)}" ${l.visit===x.label?'selected':''}>${esc(x.label)}</option>`).join(''):'<option value="Completed" '+(l.visit==='Completed'?'selected':'')+'>Completed</option><option value="No Show" '+(l.visit==='No Show'?'selected':'')+'>No Show</option>')}</select></label><label>Follow-up Date<input id="fd" type="date" value="${l.follow_up_date||''}"></label><label>Follow-up Time<input id="ft" type="time" value="${l.follow_up_time||''}"></label>${me.role==='admin'?`<label>Assigned To<select id="a"><option value="">Unassigned</option>${dbstate.callers.map(u=>`<option value="${u.id}" ${l.assigned_to===u.id?'selected':''}>${esc(u.full_name)}</option>`).join('')}</select></label>`:''}<label>Remarks<input id="r" value="${esc(l.remarks||'')}"></label>${(dbstate.settings.fields||[]).map(f=>`<label>${esc(f.label)}${fieldTypeInput({field_type:f.field_type,default_value:l.custom_data?.[f.field_key]||''},'cf_'+f.field_key)}</label>`).join('')}</div><div class="modal-actions"><button class="btn primary" id="save">Save Changes</button></div><div style="font-weight:700;font-size:13px;margin-top:18px">Call Timeline</div><div class="timeline">${logs.length?logs.map(x=>`<div class="timeline-item"><div class="timeline-time">${dt(x.called_at)} · ${esc(x.caller?.full_name)}</div><div><b>${esc(STATUS[x.calling_status])}</b>${x.remarks?' — '+esc(x.remarks):''}</div></div>`).join(''):'<span class="muted small">No calls logged yet.</span>'}</div></div>`;$('modal').classList.remove('hidden');$('closeM').onclick=()=>closeModal();$('save').onclick=()=>saveLead(l)}
+async function openLead(id){let l=dbstate.leads.find(x=>x.id===id);if(!l)return;let logs=(await db.from('call_logs').select('*, caller:profiles(full_name)').eq('lead_id',id).order('called_at',{ascending:false})).data||[];$('modal').innerHTML=`<div class="modal-box"><div class="panel-head"><div><h2 style="margin:0">Edit Lead</h2><div class="small muted">#${l.lead_number}</div></div><button class="btn secondary" id="closeM">Close</button></div><div class="form-grid"><label>Patient Name<input id="pn" value="${esc(l.patient_name)}"></label><label>Phone<input id="ph" value="${esc(l.phone)}"></label><label>Campaign<select id="c"><option value="">Select campaign</option>${dbstate.campaigns.map(c=>`<option value="${c.id}" ${l.campaign_id===c.id?'selected':''}>${esc(c.name)}</option>`).join('')}</select></label><label>Lead Source<select id="src"><option value="">Select source</option>${dbstate.sources.map(s=>`<option value="${s.id}" ${l.source_id===s.id?'selected':''}>${esc(s.name)}</option>`).join('')}</select></label><label>Hospital<select id="h"><option value="">Select hospital</option>${settingOptions('hospital').length?settingOptions('hospital').map(x=>`<option value="${esc(x.label)}" ${l.hospital===x.label?'selected':''}>${esc(x.label)}</option>`).join(''):'<option value="EHRC" '+(l.hospital==='EHRC'?'selected':'')+'>EHRC</option><option value="Altius" '+(l.hospital==='Altius'?'selected':'')+'>Altius</option>'}</select></label><label>Coupon Code<input id="cc" placeholder="Optional coupon code" value="${esc(l.coupon_code||'')}"></label><label>Calling Status<select id="s">${statusOptionHtml('calling_status',Object.fromEntries(Object.entries(STATUS).filter(([k])=>k!=='opd_booked')),l.calling_status)}</select></label><label>Calling Date<input id="calld" type="date" value="${l.calling_date||''}"></label><label>OPD Status<select id="o">${statusOptionHtml('opd_status',OPD,l.opd_status)}</select></label><label>Visit<select id="v"><option value="">Select visit</option>${(settingOptions('visit').length?settingOptions('visit').map(x=>`<option value="${esc(x.label)}" ${l.visit===x.label?'selected':''}>${esc(x.label)}</option>`).join(''):'<option value="Completed" '+(l.visit==='Completed'?'selected':'')+'>Completed</option><option value="No Show" '+(l.visit==='No Show'?'selected':'')+'>No Show</option>')}</select></label><label>Follow-up Date<input id="fd" type="date" value="${l.follow_up_date||''}"></label><label>Follow-up Time<input id="ft" type="time" value="${l.follow_up_time||''}"></label>${me.role==='admin'?`<label>Assigned To<select id="a"><option value="">Unassigned</option>${dbstate.callers.map(u=>`<option value="${u.id}" ${l.assigned_to===u.id?'selected':''}>${esc(u.full_name)}</option>`).join('')}</select></label>`:''}<label>Remarks<input id="r" value="${esc(l.remarks||'')}"></label>${(dbstate.settings.fields||[]).map(f=>`<label>${esc(f.label)}${fieldTypeInput({field_type:f.field_type,default_value:l.custom_data?.[f.field_key]||''},'cf_'+f.field_key)}</label>`).join('')}</div><div class="modal-actions"><button class="btn primary" id="save">Save Changes</button></div><div style="font-weight:700;font-size:13px;margin-top:18px">Call Timeline</div><div class="timeline">${logs.length?logs.map(x=>`<div class="timeline-item"><div class="timeline-time">${dt(x.called_at)} · ${esc(x.caller?.full_name)}</div><div><b>${esc(STATUS[x.calling_status])}</b>${x.remarks?' — '+esc(x.remarks):''}</div></div>`).join(''):'<span class="muted small">No calls logged yet.</span>'}</div></div>`;$('modal').classList.remove('hidden');$('closeM').onclick=()=>closeModal();$('save').onclick=()=>saveLead(l)}
 function openNewLead(){
-  $('modal').innerHTML=`<div class="modal-box"><div class="panel-head"><div><h2 style="margin:0">Add New Lead</h2><div class="small muted">Create a lead directly in the CRM.</div></div><button class="btn secondary" id="newClose">Close</button></div><div class="form-grid"><label>Patient Name<input id="npn" placeholder="Patient name"></label><label>Phone<input id="nph" placeholder="Phone number"></label><label>Campaign<select id="nc"><option value="">Select campaign</option>${uniqueCampaigns().map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select></label><label>Lead Source<select id="ns"><option value="">Select source</option>${dbstate.sources.map(s=>`<option value="${s.id}">${esc(s.name)}</option>`).join('')}</select></label><label>Hospital<select id="nh"><option value="">Select hospital</option>${settingOptions('hospital').length?settingOptions('hospital').map(x=>`<option value="${esc(x.label)}">${esc(x.label)}</option>`).join(''):'<option value="EHRC">EHRC</option><option value="Altius">Altius</option>'}</select></label><label>Coupon Code<input id="ncc" placeholder="Optional coupon code"></label>${me.role==='admin'?`<label>Assigned To<select id="na"><option value="">Unassigned</option>${dbstate.callers.map(u=>`<option value="${u.id}">${esc(u.full_name)}</option>`).join('')}</select></label>`:''}<label>Calling Status<select id="nst">${Object.entries(STATUS).filter(([k])=>k!=='opd_booked').map(([k,v])=>`<option value="${k}" ${k==='not_called'?'selected':''}>${v}</option>`).join('')}</select></label><label>Calling Date<input id="ncalld" type="date"></label><label>OPD Status<select id="no">${Object.entries(OPD).map(([k,v])=>`<option value="${k}" ${k==='not_discussed'?'selected':''}>${v}</option>`).join('')}</select></label><label>Visit<select id="nv"><option value="">Select visit</option>${(settingOptions('visit').length?settingOptions('visit').map(x=>`<option value="${esc(x.label)}">${esc(x.label)}</option>`).join(''):'<option value="Completed">Completed</option><option value="No Show">No Show</option>')}</select></label><label>Follow-up Date<input id="nfd" type="date"></label><label>Follow-up Time<input id="nft" type="time"></label><label>Remarks<input id="nr" placeholder="Optional remarks"></label></div><div class="modal-actions"><button class="btn primary" id="createLead">Add Lead</button></div></div>`;
+  $('modal').innerHTML=`<div class="modal-box"><div class="panel-head"><div><h2 style="margin:0">Add New Lead</h2><div class="small muted">Create a lead directly in the CRM.</div></div><button class="btn secondary" id="newClose">Close</button></div><div class="form-grid"><label>Patient Name<input id="npn" placeholder="Patient name"></label><label>Phone<input id="nph" placeholder="Phone number"></label><label>Campaign<select id="nc"><option value="">Select campaign</option>${uniqueCampaigns().map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select></label><label>Lead Source<select id="ns"><option value="">Select source</option>${dbstate.sources.map(s=>`<option value="${s.id}">${esc(s.name)}</option>`).join('')}</select></label><label>Hospital<select id="nh"><option value="">Select hospital</option>${settingOptions('hospital').length?settingOptions('hospital').map(x=>`<option value="${esc(x.label)}">${esc(x.label)}</option>`).join(''):'<option value="EHRC">EHRC</option><option value="Altius">Altius</option>'}</select></label><label>Coupon Code<input id="ncc" placeholder="Optional coupon code"></label>${me.role==='admin'?`<label>Assigned To<select id="na"><option value="">Unassigned</option>${dbstate.callers.map(u=>`<option value="${u.id}">${esc(u.full_name)}</option>`).join('')}</select></label>`:''}<label>Calling Status<select id="nst">${statusOptionHtml('calling_status',Object.fromEntries(Object.entries(STATUS).filter(([k])=>k!=='opd_booked')),'not_called')}</select></label><label>Calling Date<input id="ncalld" type="date"></label><label>OPD Status<select id="no">${statusOptionHtml('opd_status',OPD,'not_discussed')}</select></label><label>Visit<select id="nv"><option value="">Select visit</option>${(settingOptions('visit').length?settingOptions('visit').map(x=>`<option value="${esc(x.label)}">${esc(x.label)}</option>`).join(''):'<option value="Completed">Completed</option><option value="No Show">No Show</option>')}</select></label><label>Follow-up Date<input id="nfd" type="date"></label><label>Follow-up Time<input id="nft" type="time"></label><label>Remarks<input id="nr" placeholder="Optional remarks"></label></div><div class="modal-actions"><button class="btn primary" id="createLead">Add Lead</button></div></div>`;
   $('modal').classList.remove('hidden');
   $('newClose').onclick=closeModal;
   $('createLead').onclick=saveNewLead;
@@ -654,6 +654,13 @@ function openCampaign(id){let existing=id?dbstate.campaigns.find(c=>c.id===id):n
   if(r.error)return toast(r.error.message);
   await loadAll();closeModal();renderCampaigns();toast(existing?'Campaign updated':'Campaign created');
 }}
+function settingLabel(category,key,fallback){
+  const x=(dbstate.settings.options||[]).find(v=>v.category===category && v.value_key===key && v.is_active);
+  return x?.label || fallback;
+}
+function statusOptionHtml(category,obj,selected,excludeKeys=[]){
+  return Object.entries(obj).filter(([k])=>!excludeKeys.includes(k)).map(([k,v])=>`<option value="${k}" ${selected===k?'selected':''}>${esc(settingLabel(category,k,v))}</option>`).join('');
+}
 function settingOptions(category){
   return (dbstate.settings?.options||[]).filter(x=>x.category===category&&x.is_active);
 }
@@ -665,54 +672,202 @@ function fieldTypeInput(f,id){
 }
 async function renderSettings(){
   if(me.role!=='admin')return;
+
+  const callingStatuses=Object.entries(STATUS).filter(([k])=>k!=='opd_booked');
+  const opdStatuses=Object.entries(OPD);
+
   $('content').innerHTML=`<div class="grid two">
     <div class="panel">
-      <div class="panel-head"><div><b>Dropdown Options</b><div class="small muted">Manage hospitals, visit options and other configurable lead lists.</div></div></div>
+      <div class="panel-head">
+        <div><b>Dropdown Options</b><div class="small muted">Manage hospitals, visit options and other configurable lead lists.</div></div>
+      </div>
+
       <div class="form-grid">
-        <label>Category<select id="setCat"><option value="hospital">Hospital</option><option value="visit">Visit</option><option value="lead_source_alias">Lead Source Alias</option></select></label>
+        <label>Category
+          <select id="setCat">
+            <option value="hospital">Hospital</option>
+            <option value="visit">Visit</option>
+            <option value="lead_source_alias">Lead Source Alias</option>
+          </select>
+        </label>
         <label>Option label<input id="setLabel" placeholder="e.g. Narayana"></label>
         <label>Sort order<input id="setOrder" type="number" value="100"></label>
       </div>
-      <div class="modal-actions"><button class="btn primary" id="addOption">Add option</button></div>
-      <div class="table-wrap" style="margin-top:14px"><table><thead><tr><th>Category</th><th>Option</th><th>Order</th><th>Action</th></tr></thead><tbody>${(dbstate.settings.options||[]).map(x=>`<tr><td>${esc(x.category)}</td><td>${esc(x.label)}</td><td>${x.sort_order}</td><td><button class="btn danger" data-del-opt="${x.id}">Remove</button></td></tr>`).join('')}</tbody></table></div>
-      <div class="notice" style="margin-top:14px">Calling Status and OPD Status remain system statuses for data integrity. Their labels can be made configurable next without changing historical status values.</div>
+
+      <div class="modal-actions">
+        <button class="btn primary" id="addOption">Add option</button>
+      </div>
+
+      <div class="table-wrap" style="margin-top:14px">
+        <table>
+          <thead><tr><th>Category</th><th>Option</th><th>Order</th><th>Action</th></tr></thead>
+          <tbody>
+            ${(dbstate.settings.options||[]).filter(x=>!['calling_status','opd_status'].includes(x.category)).map(x=>`
+              <tr><td>${esc(x.category)}</td><td>${esc(x.label)}</td><td>${x.sort_order}</td>
+                <td><div style="display:flex;gap:7px;justify-content:flex-end">
+                  <button class="btn secondary" data-edit-opt="${x.id}">Edit</button>
+                  <button class="btn danger" data-del-opt="${x.id}">Remove</button>
+                </div></td>
+              </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>
     </div>
+
     <div class="panel">
-      <div class="panel-head"><div><b>Custom Lead Fields</b><div class="small muted">Add fields that appear on each lead's Edit form.</div></div></div>
+      <div class="panel-head">
+        <div><b>Calling Status</b><div class="small muted">Edit display labels without changing the internal status values.</div></div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Internal value</th><th>Displayed label</th><th>Action</th></tr></thead>
+          <tbody>
+            ${callingStatuses.map(([k,v])=>`
+              <tr><td><code>${esc(k)}</code></td><td>${esc(settingLabel('calling_status',k,v))}</td>
+                <td><button class="btn secondary" data-edit-status="calling_status" data-status-key="${k}">Edit</button></td>
+              </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-head">
+        <div><b>OPD Status</b><div class="small muted">Edit display labels without changing the internal status values.</div></div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Internal value</th><th>Displayed label</th><th>Action</th></tr></thead>
+          <tbody>
+            ${opdStatuses.map(([k,v])=>`
+              <tr><td><code>${esc(k)}</code></td><td>${esc(settingLabel('opd_status',k,v))}</td>
+                <td><button class="btn secondary" data-edit-status="opd_status" data-status-key="${k}">Edit</button></td>
+              </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-head">
+        <div><b>Custom Lead Fields</b><div class="small muted">Add and edit fields that appear on each lead's Edit form.</div></div>
+      </div>
+
       <div class="form-grid">
         <label>Field name<input id="cfName" placeholder="e.g. Doctor Name"></label>
         <label>Type<select id="cfType"><option value="text">Text</option><option value="number">Number</option><option value="date">Date</option><option value="boolean">Yes / No</option></select></label>
         <label>Default value<input id="cfDefault" placeholder="Optional"></label>
         <label>Sort order<input id="cfOrder" type="number" value="100"></label>
       </div>
+
       <div class="modal-actions"><button class="btn primary" id="addField">Add field</button></div>
-      <div class="table-wrap" style="margin-top:14px"><table><thead><tr><th>Field</th><th>Type</th><th>Default</th><th>Action</th></tr></thead><tbody>${(dbstate.settings.fields||[]).map(x=>`<tr><td>${esc(x.label)}</td><td>${esc(x.field_type)}</td><td>${esc(x.default_value||'')}</td><td><button class="btn danger" data-del-field="${x.id}">Remove</button></td></tr>`).join('')}</tbody></table></div>
+
+      <div class="table-wrap" style="margin-top:14px">
+        <table>
+          <thead><tr><th>Field</th><th>Type</th><th>Default</th><th>Order</th><th>Action</th></tr></thead>
+          <tbody>
+            ${(dbstate.settings.fields||[]).map(x=>`
+              <tr><td>${esc(x.label)}</td><td>${esc(x.field_type)}</td><td>${esc(x.default_value||'')}</td><td>${x.sort_order}</td>
+                <td><div style="display:flex;gap:7px;justify-content:flex-end">
+                  <button class="btn secondary" data-edit-field="${x.id}">Edit</button>
+                  <button class="btn danger" data-del-field="${x.id}">Remove</button>
+                </div></td>
+              </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>
     </div>
   </div>`;
+
   $('addOption').onclick=async()=>{
     const category=$('setCat').value,label=$('setLabel').value.trim(),sort_order=Number($('setOrder').value||100);
     if(!label)return toast('Enter an option label');
     const r=await db.from('crm_dropdown_options').insert({category,label,sort_order,is_active:true,created_by:me.id});
-    if(r.error)return toast(r.error.message);await loadAll();renderSettings();toast('Dropdown option added');
+    if(r.error)return toast(r.error.message);
+    await loadAll();renderSettings();toast('Dropdown option added');
   };
+
+  document.querySelectorAll('[data-edit-opt]').forEach(b=>b.onclick=async()=>{
+    const x=(dbstate.settings.options||[]).find(v=>v.id===b.dataset.editOpt); if(!x)return;
+    $('modal').innerHTML=`<div class="modal-box" style="max-width:520px">
+      <div class="panel-head"><div><h2 style="margin:0">Edit Dropdown Option</h2><div class="small muted">${esc(x.category)}</div></div><button class="btn secondary" id="optClose">Close</button></div>
+      <div class="form-grid"><label>Category<select id="eOptCat">
+        <option value="hospital" ${x.category==='hospital'?'selected':''}>Hospital</option>
+        <option value="visit" ${x.category==='visit'?'selected':''}>Visit</option>
+        <option value="lead_source_alias" ${x.category==='lead_source_alias'?'selected':''}>Lead Source Alias</option>
+      </select></label><label>Option label<input id="eOptLabel" value="${esc(x.label)}"></label><label>Sort order<input id="eOptOrder" type="number" value="${x.sort_order??100}"></label></div>
+      <div class="modal-actions"><button class="btn primary" id="optSave">Save Changes</button></div></div>`;
+    $('modal').classList.remove('hidden');$('optClose').onclick=()=>closeModal();
+    $('optSave').onclick=async()=>{
+      const p={category:$('eOptCat').value,label:$('eOptLabel').value.trim(),sort_order:Number($('eOptOrder').value||100),updated_at:new Date().toISOString()};
+      if(!p.label)return toast('Enter an option label');
+      const dup=await db.from('crm_dropdown_options').select('id').neq('id',x.id).eq('is_active',true).ilike('category',p.category).ilike('label',p.label).limit(1);
+      if(dup.error)return toast(dup.error.message);if(dup.data?.length)return toast('That dropdown option already exists');
+      const r=await db.from('crm_dropdown_options').update(p).eq('id',x.id);if(r.error)return toast(r.error.message);
+      await loadAll();closeModal();renderSettings();toast('Dropdown option updated');
+    };
+  });
+
   document.querySelectorAll('[data-del-opt]').forEach(b=>b.onclick=async()=>{
-    if(!confirm('Remove this dropdown option?'))return;
-    const r=await db.from('crm_dropdown_options').update({is_active:false}).eq('id',b.dataset.delOpt);
+    const x=(dbstate.settings.options||[]).find(v=>v.id===b.dataset.delOpt);if(!x)return;
+    if(!confirm(`Remove "${x.label}" from the ${x.category} dropdown? Existing leads will keep their current value.`))return;
+    const r=await db.from('crm_dropdown_options').update({is_active:false,updated_at:new Date().toISOString()}).eq('id',x.id);
     if(r.error)return toast(r.error.message);await loadAll();renderSettings();toast('Option removed');
   });
+
+  document.querySelectorAll('[data-edit-status]').forEach(b=>b.onclick=async()=>{
+    const category=b.dataset.editStatus,key=b.dataset.statusKey;
+    const sourceObj=category==='calling_status'?STATUS:OPD;
+    const current=settingLabel(category,key,sourceObj[key]);
+    $('modal').innerHTML=`<div class="modal-box" style="max-width:520px">
+      <div class="panel-head"><div><h2 style="margin:0">Edit ${category==='calling_status'?'Calling':'OPD'} Status</h2><div class="small muted">Internal value: ${esc(key)}</div></div><button class="btn secondary" id="statusClose">Close</button></div>
+      <div class="form-grid"><label>Displayed label<input id="statusLabel" value="${esc(current)}"></label><label>Sort order<input id="statusOrder" type="number" value="${((dbstate.settings.options||[]).find(x=>x.category===category&&x.value_key===key)?.sort_order)??100}"></label></div>
+      <div class="notice" style="margin-top:12px">Only the displayed label changes. Existing lead data keeps the same internal status value.</div>
+      <div class="modal-actions"><button class="btn primary" id="statusSave">Save Changes</button></div></div>`;
+    $('modal').classList.remove('hidden');$('statusClose').onclick=()=>closeModal();
+    $('statusSave').onclick=async()=>{
+      const label=$('statusLabel').value.trim(),sort_order=Number($('statusOrder').value||100);
+      if(!label)return toast('Enter a status label');
+      let existing=(dbstate.settings.options||[]).find(x=>x.category===category&&x.value_key===key);
+      let r=existing
+        ? await db.from('crm_dropdown_options').update({label,sort_order,is_active:true,updated_at:new Date().toISOString()}).eq('id',existing.id)
+        : await db.from('crm_dropdown_options').insert({category,label,value_key:key,sort_order,is_active:true,created_by:me.id});
+      if(r.error)return toast(r.error.message);
+      await loadAll();closeModal();renderSettings();toast('Status updated');
+    };
+  });
+
   $('addField').onclick=async()=>{
     const label=$('cfName').value.trim(),field_type=$('cfType').value,default_value=$('cfDefault').value.trim()||null,sort_order=Number($('cfOrder').value||100);
     if(!label)return toast('Enter a field name');
     const field_key=label.toLowerCase().replace(/[^a-z0-9]+/g,'_').replace(/^_+|_+$/g,'').slice(0,50);
     const r=await db.from('lead_custom_fields').insert({label,field_key,field_type,default_value,sort_order,is_active:true,created_by:me.id});
-    if(r.error)return toast(r.error.message);await loadAll();renderSettings();toast('Custom field added');
+    if(r.error)return toast(r.error.message);
+    await loadAll();renderSettings();toast('Custom field added');
   };
+
+  document.querySelectorAll('[data-edit-field]').forEach(b=>b.onclick=async()=>{
+    const x=(dbstate.settings.fields||[]).find(v=>v.id===b.dataset.editField);if(!x)return;
+    $('modal').innerHTML=`<div class="modal-box" style="max-width:560px"><div class="panel-head"><div><h2 style="margin:0">Edit Custom Field</h2><div class="small muted">${esc(x.field_key)}</div></div><button class="btn secondary" id="fieldClose">Close</button></div>
+      <div class="form-grid"><label>Field name<input id="eFieldLabel" value="${esc(x.label)}"></label><label>Type<select id="eFieldType"><option value="text" ${x.field_type==='text'?'selected':''}>Text</option><option value="number" ${x.field_type==='number'?'selected':''}>Number</option><option value="date" ${x.field_type==='date'?'selected':''}>Date</option><option value="boolean" ${x.field_type==='boolean'?'selected':''}>Yes / No</option></select></label><label>Default value<input id="eFieldDefault" value="${esc(x.default_value||'')}"></label><label>Sort order<input id="eFieldOrder" type="number" value="${x.sort_order??100}"></label></div>
+      <div class="notice" style="margin-top:12px">The field key stays unchanged so existing lead data remains attached.</div><div class="modal-actions"><button class="btn primary" id="fieldSave">Save Changes</button></div></div>`;
+    $('modal').classList.remove('hidden');$('fieldClose').onclick=()=>closeModal();
+    $('fieldSave').onclick=async()=>{
+      const p={label:$('eFieldLabel').value.trim(),field_type:$('eFieldType').value,default_value:$('eFieldDefault').value.trim()||null,sort_order:Number($('eFieldOrder').value||100),updated_at:new Date().toISOString()};
+      if(!p.label)return toast('Enter a field name');
+      const r=await db.from('lead_custom_fields').update(p).eq('id',x.id);if(r.error)return toast(r.error.message);
+      await loadAll();closeModal();renderSettings();toast('Custom field updated');
+    };
+  });
+
   document.querySelectorAll('[data-del-field]').forEach(b=>b.onclick=async()=>{
-    if(!confirm('Remove this custom field?'))return;
-    const r=await db.from('lead_custom_fields').update({is_active:false}).eq('id',b.dataset.delField);
-    if(r.error)return toast(r.error.message);await loadAll();renderSettings();toast('Field removed');
+    const x=(dbstate.settings.fields||[]).find(v=>v.id===b.dataset.delField);if(!x)return;
+    if(!confirm(`Remove the "${x.label}" field? Existing values in leads will remain stored but the field will no longer appear in the form.`))return;
+    const r=await db.from('lead_custom_fields').update({is_active:false,updated_at:new Date().toISOString()}).eq('id',x.id);
+    if(r.error)return toast(r.error.message);await loadAll();renderSettings();toast('Custom field removed');
   });
 }
+
 function renderImport(){if(me.role!=='admin')return;$('content').innerHTML=`<div class="panel" style="margin-top:0"><div class="notice">CSV import is still available for one-off files. For live Meta / WhatsApp CTA / RCS / Hospital streams, use <b>Google Sheets</b> in the menu.</div><div class="modal-actions"><button class="btn primary" onclick="go('sheets')">Connect Google Sheet</button></div></div>`}
 function csvRows(t){let out=[],row=[],cell='',q=false;for(let i=0;i<t.length;i++){let ch=t[i],nx=t[i+1];if(ch==='"'&&nx==='"'){cell+='"';i++;continue}if(ch==='"'){q=!q;continue}if(ch===','&&!q){row.push(cell);cell='';continue}if((ch==='\n'||ch==='\r')&&!q){if(ch==='\r'&&nx==='\n')i++;row.push(cell);if(row.some(v=>v.trim()))out.push(row);row=[];cell='';continue}cell+=ch}if(cell||row.length){row.push(cell);out.push(row)}return out}
 async function importCSV(){let f=$('if').files[0],campaign_id=$('ic').value,source_id=$('is').value;if(!f||!campaign_id||!source_id)return toast('Choose campaign, source and CSV');let rows=csvRows(await f.text()),head=rows.shift().map(x=>x.trim().toLowerCase()),ni=head.indexOf('patient_name')>=0?head.indexOf('patient_name'):head.indexOf('name'),pi=head.indexOf('phone')>=0?head.indexOf('phone'):head.indexOf('mobile');if(ni<0||pi<0)return toast('CSV needs name and phone');let existing=new Set(dbstate.leads.map(l=>String(l.phone).replace(/\D/g,'').slice(-10))),ids=dbstate.callers.map(x=>x.id),added=0,dup=0,ci=0;for(let row of rows){let name=(row[ni]||'').trim(),phone=(row[pi]||'').replace(/\D/g,'');if(!name||!phone)continue;let key=phone.slice(-10);if(existing.has(key)){dup++;continue}existing.add(key);let assigned=$('ia').value==='round'?(ids[ci++%ids.length]||null):null;let r=await db.from('leads').insert({patient_name:name,phone,source_id,campaign_id,assigned_to:assigned});if(!r.error)added++}await loadLeads();toast(`Imported ${added} · duplicates skipped ${dup}`)}
