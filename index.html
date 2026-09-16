@@ -819,55 +819,155 @@ function openDuplicateLeadChoice(l){
 }
 
 async function saveNewLead(){
-  let name=$('npn').value.trim(),phone=$('nph').value.trim(),campaign_id=$('nc').value,source_id=$('ns').value,hospital=$('nh').value||null,coupon_code=$('ncc').value.trim()||null;
-  if(!name||!phone||!campaign_id||!source_id)return toast('Name, phone, campaign and source are required');
-  let assigned=me.role==='admin'?($('na').value||null):me.id;
-  let r=await db.rpc('add_lead_manual',{p_patient_name:name,p_phone:phone,p_source_id:source_id,p_campaign_id:campaign_id,p_assigned_to:assigned,p_calling_status:$('nst').value,p_opd_status:$('no').value,p_follow_up_date:$('nfd').value||null,p_follow_up_time:$('nft').value||null,p_remarks:$('nr').value.trim()||null,p_hospital:hospital,p_coupon_code:coupon_code});
-  if(r.error)return toast(r.error.message);
-  if(r.data?.duplicate){
-    const matches=(await db.from('leads').select('*, campaign:campaigns(name,campaign_date), source:lead_sources(name), assignee:profiles!leads_assigned_to_fkey(full_name)').eq('normalized_phone',phone.replace(/\D/g,'').slice(-10)).eq('campaign_id',campaign_id).limit(1)).data||[];
-    const existingLead=matches[0];
-    if(existingLead){
-      openDuplicateLeadChoice(existingLead);
-      return;
-    }
-    return toast('A lead with this phone already exists in this campaign');
+  let name=$('npn').value.trim(),
+      phone=$('nph').value.trim(),
+      campaign_id=$('nc').value,
+      source_id=$('ns').value,
+      hospital=$('nh').value||null,
+      coupon_code=$('ncc').value.trim()||null;
+
+  if(!name||!phone||!campaign_id||!source_id)
+    return toast('Name, phone, campaign and source are required');
+
+  const normalizedPhone=phone.replace(/\D/g,'').slice(-10);
+  if(normalizedPhone.length!==10)return toast('Enter a valid 10-digit phone number');
+
+  const selectedCampaign=dbstate.campaigns.find(c=>c.id===campaign_id);
+  if(!hospital)hospital=selectedCampaign?.location||null;
+  if(!coupon_code)coupon_code=selectedCampaign?.coupon_code||null;
+
+  let assigned=me.role==='admin'?($('na')?.value||null):me.id;
+  const calling_status=$('nst').value;
+  const opd_status=$('no').value;
+  const follow_up_date=$('nfd').value||null;
+  const follow_up_time=$('nft').value||null;
+  const remarks=$('nr').value.trim()||null;
+
+  // First inspect existing leads with the same phone in this campaign.
+  const existingRes=await db.from('leads')
+    .select('*, campaign:campaigns(name,campaign_date), source:lead_sources(name), assignee:profiles!leads_assigned_to_fkey(full_name)')
+    .eq('campaign_id',campaign_id)
+    .eq('normalized_phone',normalizedPhone);
+
+  if(existingRes.error)return toast(existingRes.error.message);
+
+  const existingLeads=existingRes.data||[];
+
+  // Same number is allowed for multiple people (e.g. husband + wife).
+  // Only treat it as a duplicate when the patient name is the same.
+  const samePerson=existingLeads.find(x=>
+    String(x.patient_name||'').trim().toLowerCase()===name.toLowerCase()
+  );
+
+  if(samePerson){
+    openDuplicateLeadChoice(samePerson);
+    return;
   }
 
-  // The manual RPC may return different shapes depending on the deployed
-  // database function. Re-query the newly-created lead by phone + campaign
-  // and then persist all optional fields directly on the lead row.
-  const normalizedPhone=phone.replace(/\D/g,'').slice(-10);
-  const lookup=await db.from('leads')
-    .select('id,created_at,phone,campaign_id')
-    .eq('campaign_id',campaign_id)
-    .order('created_at',{ascending:false})
-    .limit(50);
+  // Use the normal RPC first. Some deployed versions still enforce the old
+  // phone+campaign duplicate rule, so fall back to a direct insert when the
+  // RPC reports a duplicate. The DB no longer has the phone+campaign unique
+  // constraint, allowing shared-family phone numbers.
+  let r=await db.rpc('add_lead_manual',{
+    p_patient_name:name,
+    p_phone:phone,
+    p_source_id:source_id,
+    p_campaign_id:campaign_id,
+    p_assigned_to:assigned,
+    p_calling_status:calling_status,
+    p_opd_status:opd_status,
+    p_follow_up_date:follow_up_date,
+    p_follow_up_time:follow_up_time,
+    p_remarks:remarks,
+    p_hospital:hospital,
+    p_coupon_code:coupon_code
+  });
 
-  if(lookup.error)return toast(lookup.error.message);
+  let leadId=null;
 
-  const matches=(lookup.data||[]).filter(x=>String(x.phone||'').replace(/\D/g,'').slice(-10)===normalizedPhone);
-  const leadId=r.data?.lead_id || matches[0]?.id;
+  if(r.error){
+    // Try direct insert only for the known duplicate behavior.
+    if(!/exist|duplicate|already|unique/i.test(r.error.message||'')){
+      return toast(r.error.message);
+    }
+  }else if(r.data?.duplicate){
+    // Old RPC says duplicate; since names differ, continue with direct insert.
+  }else if(r.data?.lead_id){
+    leadId=r.data.lead_id;
+  }else if(Array.isArray(r.data)&&r.data[0]?.lead_id){
+    leadId=r.data[0].lead_id;
+  }
 
-  if(!leadId)return toast('Lead was created, but could not be reloaded for saving Hospital/Coupon Code');
+  if(!leadId){
+    let custom_data={};
+    (dbstate.settings.fields||[]).forEach(f=>{
+      const el=$('ncf_'+f.field_key);
+      if(el)custom_data[f.field_key]=el.value||null;
+    });
 
-  let custom_data={};(dbstate.settings.fields||[]).forEach(f=>{const el=$('ncf_'+f.field_key);if(el)custom_data[f.field_key]=el.value||null});const patch={
-    hospital:hospital,
-    coupon_code:coupon_code,
-    custom_data,
-    calling_date:$('ncalld').value||null,
-    visit:$('nv').value||null,
-    updated_at:new Date().toISOString()
-  };
+    const ins=await db.from('leads').insert({
+      patient_name:name,
+      phone:phone,
+      source_id:source_id,
+      campaign_id:campaign_id,
+      assigned_to:assigned,
+      calling_status,
+      opd_status,
+      follow_up_date,
+      follow_up_time,
+      remarks,
+      hospital,
+      coupon_code,
+      custom_data
+    }).select('id').single();
 
-  const pr=await db.from('leads').update(patch).eq('id',leadId);
-  if(pr.error)return toast(pr.error.message);
+    if(ins.error){
+      if(/duplicate|unique|exist/i.test(ins.error.message||'')){
+        return toast('This number is already used for the same patient in this campaign.');
+      }
+      return toast(ins.error.message);
+    }
+    leadId=ins.data?.id||null;
+  }
+
+  if(!leadId)return toast('Lead could not be created');
+
+  if(assigned){
+    const ar=await db.from('lead_assignments').insert({
+      lead_id:leadId,
+      assigned_to:assigned,
+      assigned_by:me.id
+    });
+    if(ar.error)console.warn('Assignment history insert failed:',ar.error.message);
+  }
+
+  if(calling_status!=='not_called'){
+    const cr=await db.from('call_logs').insert({
+      lead_id:leadId,
+      caller_id:me.id,
+      calling_status,
+      remarks
+    });
+    if(cr.error)console.warn('Call log insert failed:',cr.error.message);
+  }
+
+  if(calling_status==='follow_up'){
+    const fr=await db.from('follow_ups').insert({
+      lead_id:leadId,
+      assigned_to:assigned||me.id,
+      follow_up_date:follow_up_date||new Date().toISOString().slice(0,10),
+      follow_up_time,
+      notes:remarks
+    });
+    if(fr.error)console.warn('Follow-up insert failed:',fr.error.message);
+  }
 
   await loadAll();
   closeModal();
-  renderLeads();
-  renderDash();
-  toast('New lead added');
+  go('leads');
+  toast(existingLeads.length
+    ? `Lead added — shared phone number allowed for ${name}`
+    : 'New lead added');
 }
 function closeModal(){$('modal').classList.add('hidden')}
 async function saveLead(l){let custom_data={...(l.custom_data||{})};(dbstate.settings.fields||[]).forEach(f=>{const el=$('cf_'+f.field_key);if(el)custom_data[f.field_key]=el.value||null});let patch={patient_name:$('pn').value.trim(),phone:$('ph').value.trim(),campaign_id:$('c').value,source_id:$('src').value,calling_status:$('s').value,opd_status:$('o').value,calling_date:$('calld').value||null,visit:$('v').value||null,follow_up_date:$('fd').value||null,follow_up_time:$('ft').value||null,remarks:$('r').value.trim()||null,hospital:$('h').value||null,coupon_code:$('cc').value.trim()||null,custom_data,updated_at:new Date().toISOString()};if(!patch.patient_name||!patch.phone||!patch.campaign_id||!patch.source_id)return toast('Name, phone, campaign and source are required');if(me.role==='admin')patch.assigned_to=$('a').value||null;let u=await db.from('leads').update(patch).eq('id',l.id);if(u.error)return toast(u.error.message);await db.from('call_logs').insert({lead_id:l.id,caller_id:me.id,calling_status:patch.calling_status,remarks:patch.remarks});if(patch.calling_status==='follow_up')await db.from('follow_ups').insert({lead_id:l.id,assigned_to:patch.assigned_to||l.assigned_to||me.id,follow_up_date:patch.follow_up_date||new Date().toISOString().slice(0,10),follow_up_time:patch.follow_up_time,notes:patch.remarks});await loadAll();closeModal();go('leads');toast('Lead updated')}
