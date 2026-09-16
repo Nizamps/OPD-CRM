@@ -327,7 +327,7 @@ tr:hover td{background:#fcfefe}
 </style>
 </head>
 <body>
-<div id="login" class="center screen">
+<div id="login" class="center screen hidden">
   <div class="login-card">
     <div class="brand">OPD <span>Campaign CRM</span></div>
     <h1>Welcome Back</h1>
@@ -364,7 +364,14 @@ window.SUPABASE_CONFIG = {
 <script>
 const {createClient}=supabase;
 const C=window.SUPABASE_CONFIG||{};
-const db=createClient(C.url,C.anonKey);
+const db=createClient(C.url,C.anonKey,{
+  auth:{
+    persistSession:true,
+    autoRefreshToken:true,
+    detectSessionInUrl:false,
+    storageKey:'opd-crm-auth'
+  }
+});
 const GOOGLE_SYNC_URL=C.googleSyncUrl||'';
 const STATUS={not_called:'Not Called',connected:'Connected',dnp:'DNP',busy:'Busy',switched_off:'Switched Off',wrong_number:'Wrong Number',interested:'Interested',not_interested:'Not Interested',follow_up:'Follow-up',opd_booked:'OPD Booked',call_back:'Call Back Requested'};
 const OPD={not_discussed:'Not Discussed',interested:'Interested',opd_recommended:'OPD Recommended',opd_booked:'OPD Booked',opd_completed:'OPD Completed',no_show:'No Show',cancelled:'Cancelled'};
@@ -374,7 +381,43 @@ const date=x=>x?new Date(x+'T00:00:00').toLocaleDateString('en-IN',{day:'2-digit
 const dt=x=>x?new Date(x).toLocaleString('en-IN',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'}):'';
 const toast=m=>{let t=$('toast');t.textContent=m;t.style.display='block';setTimeout(()=>t.style.display='none',2200)};
 const pill=s=>`<span class="pill ${['connected','opd_booked'].includes(s)?'success':s==='dnp'||s==='wrong_number'||s==='not_interested'?'danger':s==='follow_up'||s==='interested'?'warn':''}">${esc(STATUS[s]||s)}</span>`;
-async function start(){if(!C.url||C.url.includes('YOUR_PROJECT')){ $('login').innerHTML='<div class="login-card"><div class="brand">OPD <span>Campaign CRM</span></div><h1>Configure Supabase</h1><p class="muted">Edit the <b>SUPABASE_CONFIG</b> block near the top of this file with your project URL and Publishable/anon key.</p><div class="notice">Never use a sb_secret or service-role key in this GitHub site.</div></div>';return}const s=await db.auth.getSession();session=s.data.session;if(session){await loadMe();await loadAll();showApp()}else $('login').classList.remove('hidden')}
+async function start(){
+  if(!C.url||C.url.includes('YOUR_PROJECT')){
+    $('login').innerHTML='<div class="login-card"><div class="brand">OPD <span>Campaign CRM</span></div><h1>Configure Supabase</h1><p class="muted">Edit the <b>SUPABASE_CONFIG</b> block near the top of this file with your project URL and Publishable/anon key.</p><div class="notice">Never use a sb_secret or service-role key in this GitHub site.</div></div>';
+    $('login').classList.remove('hidden');
+    return;
+  }
+  try{
+    const s=await db.auth.getSession();
+    session=s.data?.session||null;
+    if(session){
+      await loadMe();
+      await loadAll();
+      showApp();
+    }else{
+      $('login').classList.remove('hidden');
+    }
+  }catch(e){
+    console.error(e);
+    if(session){
+      $('app').classList.remove('hidden');
+      $('login').classList.add('hidden');
+      $('loginError').textContent='Session restored, but CRM data could not be loaded: '+(e.message||'Unknown error');
+    }else{
+      $('login').classList.remove('hidden');
+      $('loginError').textContent=e.message||'Unable to start CRM';
+    }
+  }
+}
+db.auth.onAuthStateChange((event,newSession)=>{
+  if(event==='SIGNED_OUT'){
+    session=null;me=null;
+    $('app').classList.add('hidden');
+    $('login').classList.remove('hidden');
+  }else if(event==='SIGNED_IN' || event==='TOKEN_REFRESHED'){
+    session=newSession||session;
+  }
+});
 async function loadMe(){const r=await db.from('profiles').select('*').eq('id',session.user.id).single();if(r.error)throw r.error;me=r.data}
 async function loadAll(){let qs=[db.from('campaigns').select('*').order('campaign_date',{ascending:false}),db.from('lead_sources').select('*').eq('is_active',true).order('name'),db.from('profiles').select('*').eq('is_active',true).order('full_name')];if(me.role==='admin')qs.push(db.from('sheet_connections').select('*, source:lead_sources(name), campaign:campaigns(name,campaign_date)').order('created_at',{ascending:false}));let r=await Promise.all(qs);dbstate.campaigns=r[0].data||[];dbstate.sources=r[1].data||[];dbstate.callers=(r[2].data||[]).filter(x=>x.role==='caller');dbstate.sheetConnections=(me.role==='admin'?(r[3]?.data||[]):[]);await loadLeads()}
 async function loadLeads(){
@@ -494,7 +537,19 @@ async function deleteCampaign(id){
   toast(`Campaign "${c.name}" deleted`);
 }
 
-function openCampaign(id){let existing=id?dbstate.campaigns.find(c=>c.id===id):null;let title=existing?'Edit Campaign':'Create Campaign';$('modal').innerHTML=`<div class="modal-box"><div class="panel-head"><h2 style="margin:0">${title}</h2><button class="btn secondary" id="cx">Close</button></div><div class="form-grid"><label>Campaign Name<input id="cn" placeholder="BALA X Camp" value="${esc(existing?.name||'')}"></label><label>Campaign Date<input id="cd" type="date" value="${esc(existing?.campaign_date||'')}"></label><label>Status<select id="cs"><option value="active" ${existing?.status==='active'?'selected':''}>Active</option><option value="draft" ${existing?.status==='draft'?'selected':''}>Draft</option><option value="completed" ${existing?.status==='completed'?'selected':''}>Completed</option></select></label><label>Location<input id="cl" value="${esc(existing?.location||'')}"></label><label>Coupon Code<input id="cco" placeholder="e.g. ORTHO500" value="${esc(existing?.coupon_code||'')}"></label></div><label style="margin-top:14px">Notes<textarea id="cno">${esc(existing?.notes||'')}</textarea></label><div class="modal-actions"><button class="btn primary" id="cgo">${existing?'Save Changes':'Create'}</button></div></div>`;$('modal').classList.remove('hidden');$('cx').onclick=closeModal;$('cgo').onclick=async()=>{let p={name:$('cn').value.trim(),campaign_date:$('cd').value,status:$('cs').value,location:$('cl').value,notes:$('cno').value,coupon_code:$('cco').value.trim()||null};if(!p.name||!p.campaign_date)return toast('Campaign name and date are required');let r=existing?await db.from('campaigns').update(p).eq('id',existing.id):await db.from('campaigns').insert({...p,created_by:me.id});if(r.error)return toast(r.error.message);await loadAll();closeModal();renderCampaigns();toast(existing?'Campaign updated':'Campaign created')}}
+function openCampaign(id){let existing=id?dbstate.campaigns.find(c=>c.id===id):null;let title=existing?'Edit Campaign':'Create Campaign';$('modal').innerHTML=`<div class="modal-box"><div class="panel-head"><h2 style="margin:0">${title}</h2><button class="btn secondary" id="cx">Close</button></div><div class="form-grid"><label>Campaign Name<input id="cn" placeholder="BALA X Camp" value="${esc(existing?.name||'')}"></label><label>Campaign Date<input id="cd" type="date" value="${esc(existing?.campaign_date||'')}"></label><label>Status<select id="cs"><option value="active" ${existing?.status==='active'?'selected':''}>Active</option><option value="draft" ${existing?.status==='draft'?'selected':''}>Draft</option><option value="completed" ${existing?.status==='completed'?'selected':''}>Completed</option></select></label><label>Location<input id="cl" value="${esc(existing?.location||'')}"></label><label>Coupon Code<input id="cco" placeholder="e.g. ORTHO500" value="${esc(existing?.coupon_code||'')}"></label></div><label style="margin-top:14px">Notes<textarea id="cno">${esc(existing?.notes||'')}</textarea></label><div class="modal-actions"><button class="btn primary" id="cgo">${existing?'Save Changes':'Create'}</button></div></div>`;$('modal').classList.remove('hidden');$('cx').onclick=closeModal;$('cgo').onclick=async()=>{
+  let p={name:$('cn').value.trim(),campaign_date:$('cd').value,status:$('cs').value,location:$('cl').value,notes:$('cno').value,coupon_code:$('cco').value.trim()||null};
+  if(!p.name||!p.campaign_date)return toast('Campaign name and date are required');
+  if(!existing){
+    const dup=await db.from('campaigns').select('id,name,campaign_date,location').ilike('name',p.name).eq('campaign_date',p.campaign_date);
+    if(dup.error)return toast(dup.error.message);
+    const hit=(dup.data||[]).find(c=>String(c.location||'').trim().toLowerCase()===String(p.location||'').trim().toLowerCase());
+    if(hit)return toast('This campaign already exists for this date and location');
+  }
+  let r=existing?await db.from('campaigns').update(p).eq('id',existing.id):await db.from('campaigns').insert({...p,created_by:me.id});
+  if(r.error)return toast(r.error.message);
+  await loadAll();closeModal();renderCampaigns();toast(existing?'Campaign updated':'Campaign created');
+}}
 function renderImport(){if(me.role!=='admin')return;$('content').innerHTML=`<div class="panel" style="margin-top:0"><div class="notice">CSV import is still available for one-off files. For live Meta / WhatsApp CTA / RCS / Hospital streams, use <b>Google Sheets</b> in the menu.</div><div class="modal-actions"><button class="btn primary" onclick="go('sheets')">Connect Google Sheet</button></div></div>`}
 function csvRows(t){let out=[],row=[],cell='',q=false;for(let i=0;i<t.length;i++){let ch=t[i],nx=t[i+1];if(ch==='"'&&nx==='"'){cell+='"';i++;continue}if(ch==='"'){q=!q;continue}if(ch===','&&!q){row.push(cell);cell='';continue}if((ch==='\n'||ch==='\r')&&!q){if(ch==='\r'&&nx==='\n')i++;row.push(cell);if(row.some(v=>v.trim()))out.push(row);row=[];cell='';continue}cell+=ch}if(cell||row.length){row.push(cell);out.push(row)}return out}
 async function importCSV(){let f=$('if').files[0],campaign_id=$('ic').value,source_id=$('is').value;if(!f||!campaign_id||!source_id)return toast('Choose campaign, source and CSV');let rows=csvRows(await f.text()),head=rows.shift().map(x=>x.trim().toLowerCase()),ni=head.indexOf('patient_name')>=0?head.indexOf('patient_name'):head.indexOf('name'),pi=head.indexOf('phone')>=0?head.indexOf('phone'):head.indexOf('mobile');if(ni<0||pi<0)return toast('CSV needs name and phone');let existing=new Set(dbstate.leads.map(l=>String(l.phone).replace(/\D/g,'').slice(-10))),ids=dbstate.callers.map(x=>x.id),added=0,dup=0,ci=0;for(let row of rows){let name=(row[ni]||'').trim(),phone=(row[pi]||'').replace(/\D/g,'');if(!name||!phone)continue;let key=phone.slice(-10);if(existing.has(key)){dup++;continue}existing.add(key);let assigned=$('ia').value==='round'?(ids[ci++%ids.length]||null):null;let r=await db.from('leads').insert({patient_name:name,phone,source_id,campaign_id,assigned_to:assigned});if(!r.error)added++}await loadLeads();toast(`Imported ${added} · duplicates skipped ${dup}`)}
