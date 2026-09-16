@@ -401,7 +401,7 @@ const db=createClient(C.url,C.anonKey,{
 const GOOGLE_SYNC_URL=C.googleSyncUrl||'';
 const STATUS={not_called:'Not Called',connected:'Connected',dnp:'DNP',busy:'Busy',switched_off:'Switched Off',wrong_number:'Wrong Number',interested:'Interested',not_interested:'Not Interested',follow_up:'Follow-up',opd_booked:'OPD Booked',call_back:'Call Back Requested'};
 const OPD={not_discussed:'Not Discussed',interested:'Interested',opd_recommended:'OPD Recommended',opd_booked:'OPD Booked',opd_completed:'OPD Completed',no_show:'No Show',cancelled:'Cancelled'};
-let session=null,me=null,dbstate={campaigns:[],sources:[],callers:[],leads:[],sheetConnections:[],settings:{options:[],fields:[]}};
+let session=null,me=null,dbstate={campaigns:[],sources:[],callers:[],leads:[],sheetConnections:[],settings:{options:[],fields:[]},opdBookings:[]};
 const $=x=>document.getElementById(x),esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const date=x=>x?new Date(x+'T00:00:00').toLocaleDateString('en-IN',{day:'2-digit',month:'short',year:'numeric'}):'';
 const dt=x=>x?new Date(x).toLocaleString('en-IN',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'}):'';
@@ -466,6 +466,11 @@ async function loadAll(){let qs=[db.from('campaigns').select('*').order('campaig
       if(fieldRes.error)console.warn('Custom fields unavailable:',fieldRes.error.message);
     }catch(e){console.warn('Settings load skipped:',e);dbstate.settings={options:[],fields:[]};}
   }
+  try{
+    const br=await db.from('opd_bookings').select('*, campaign:campaigns(name,campaign_date)').order('created_at',{ascending:false});
+    dbstate.opdBookings=br.data||[];
+    if(br.error)console.warn('OPD bookings load:',br.error.message);
+  }catch(e){dbstate.opdBookings=[];console.warn('OPD bookings unavailable:',e)}
   await loadLeads();refreshPendingBadge()}
 async function loadLeads(){
   const pageSize=1000;
@@ -507,93 +512,10 @@ function buildNav(){
   refreshPendingBadge();
 }
 function go(p){document.querySelectorAll('#nav button').forEach(b=>b.classList.toggle('active',b.dataset.page===p));let meta={dashboard:['Dashboard','Campaign and calling performance'],leads:['Leads','Work your calling queue'],campaigns:['Campaigns','Create and manage weekend campaigns'],import:['Import','Bring leads into a campaign'],sheets:['Google Sheets','Connect live lead sources'],export:['Export','Download filtered lead data'],users:['Users','Manage CRM access'],settings:['Settings','Manage dropdowns and custom lead fields']}[p];$('title').textContent=meta[0];$('subtitle').textContent=meta[1];$('actions').innerHTML='';({dashboard:renderDash,leads:renderLeads,campaigns:renderCampaigns,import:renderImport,sheets:renderSheets,export:renderExport,users:renderUsers,settings:renderSettings}[p]||renderDash)()}
-function renderDash(){
-  const campaignOptions=uniqueCampaigns ? uniqueCampaigns() : dbstate.campaigns;
-  $('content').innerHTML=`
-    <div class="panel dashboard-filter-panel" style="margin-top:0">
-      <div class="filter-group" style="max-width:620px">
-        <span class="filter-label">Dashboard Campaign</span>
-        <select id="dashCampaign">
-          <option value="">All campaigns</option>
-          ${campaignOptions.map(c=>`<option value="${c.id}">${esc(c.name)} · ${date(c.campaign_date)}</option>`).join('')}
-        </select>
-      </div>
-    </div>
-    <div id="dashBody"></div>
-  `;
-  $('dashCampaign').addEventListener('change',renderDashboardBody);
-  renderDashboardBody();
-}
-
-function renderDashboardBody(){
-  const selectedCampaignId=$('dashCampaign')?.value||'';
-  let l=dbstate.leads;
-  if(selectedCampaignId) l=l.filter(x=>x.campaign_id===selectedCampaignId);
-
-  const selectedCampaign=dbstate.campaigns.find(c=>c.id===selectedCampaignId);
-  const label=selectedCampaign
-    ? `Campaign: <b>${esc(selectedCampaign.name)}</b> · ${date(selectedCampaign.campaign_date)}`
-    : (dbstate.campaigns[0]
-        ? `Latest campaign: <b>${esc(dbstate.campaigns[0].name)}</b> · ${date(dbstate.campaigns[0].campaign_date)}`
-        : 'Create your first weekend campaign from Campaigns.');
-
-  const n=l.length;
-  const metrics=[
-    ['Total Leads',n],
-    ['Assigned',l.filter(x=>x.assigned_to).length],
-    ['Called',l.filter(x=>x.calling_status!=='not_called').length],
-    ['Connected',l.filter(x=>x.calling_status==='connected').length],
-    ['DNP',l.filter(x=>x.calling_status==='dnp').length],
-    ['Follow-up',l.filter(x=>x.calling_status==='follow_up').length],
-    ['OPD Booked',l.filter(x=>x.opd_status==='opd_booked').length],
-    ['Visit Completed',l.filter(x=>String(x.visit||'').trim().toLowerCase()==='completed').length]
-  ];
-
-  $('dashBody').innerHTML=`
-    <div class="notice">${label}</div>
-    <div class="grid metrics" style="margin-top:17px">
-      ${metrics.map(x=>`<div class="card"><div class="metric-label">${x[0]}</div><div class="metric">${x[1]}</div></div>`).join('')}
-    </div>
-    <div class="grid two">
-      <div class="panel">
-        <div class="panel-head"><b>Caller Performance</b></div>
-        ${me.role==='admin'?callerPerf(l):myPerf(l)}
-      </div>
-      <div class="panel">
-        <div class="panel-head"><b>Lead Sources</b></div>
-        ${sourcePerf(l)}
-      </div>
-    </div>
-  `;
-}
-
-function callerPerf(leads){
-  return `<div class="table-wrap"><table><thead><tr><th>Caller</th><th>Assigned</th><th>Called</th><th>Connected</th><th>OPD</th></tr></thead><tbody>${
-    dbstate.callers.map(u=>{
-      let x=leads.filter(l=>l.assigned_to===u.id);
-      return `<tr><td>${esc(u.full_name)}</td><td>${x.length}</td><td>${x.filter(l=>l.calling_status!=='not_called').length}</td><td>${x.filter(l=>l.calling_status==='connected').length}</td><td>${x.filter(l=>l.opd_status==='opd_booked').length}</td></tr>`;
-    }).join('')
-  }</tbody></table></div>`;
-}
-
-function myPerf(leads){
-  let l=leads;
-  return [
-    ['My Leads',l.length],
-    ['Pending',l.filter(x=>x.calling_status==='not_called').length],
-    ['Follow-ups',l.filter(x=>x.calling_status==='follow_up').length],
-    ['OPD Booked',l.filter(x=>x.opd_status==='opd_booked').length]
-  ].map(x=>`<div style="display:flex;justify-content:space-between;margin:12px 0;font-size:13px"><span>${x[0]}</span><b>${x[1]}</b></div>`).join('');
-}
-
-function sourcePerf(leads){
-  return `<div class="table-wrap"><table><thead><tr><th>Source</th><th>Leads</th><th>Called</th><th>OPD</th></tr></thead><tbody>${
-    dbstate.sources.map(s=>{
-      let x=leads.filter(l=>l.source_id===s.id);
-      return `<tr><td>${esc(s.name)}</td><td>${x.length}</td><td>${x.filter(l=>l.calling_status!=='not_called').length}</td><td>${x.filter(l=>l.opd_status==='opd_booked').length}</td></tr>`;
-    }).join('')
-  }</tbody></table></div>`;
-}
+function renderDash(){let l=dbstate.leads,n=l.length;let m=[['Total Leads',n],['Assigned',l.filter(x=>x.assigned_to).length],['Called',l.filter(x=>x.calling_status!=='not_called').length],['Connected',l.filter(x=>x.calling_status==='connected').length],['DNP',l.filter(x=>x.calling_status==='dnp').length],['Follow-up',l.filter(x=>x.calling_status==='follow_up').length],['OPD Booked',l.filter(x=>x.opd_status==='opd_booked').length],['Visit Completed',l.filter(x=>String(x.visit||'').trim().toLowerCase()==='completed').length]];$('content').innerHTML=`<div class="notice">${dbstate.campaigns[0]?`Latest campaign: <b>${esc(dbstate.campaigns[0].name)}</b> · ${date(dbstate.campaigns[0].campaign_date)}`:'Create your first weekend campaign from Campaigns.'}</div><div class="grid metrics" style="margin-top:17px">${m.map(x=>`<div class="card"><div class="metric-label">${x[0]}</div><div class="metric">${x[1]}</div></div>`).join('')}</div><div class="grid two"><div class="panel"><div class="panel-head"><b>Caller Performance</b></div>${me.role==='admin'?callerPerf():myPerf()}</div><div class="panel"><div class="panel-head"><b>Lead Sources</b></div>${sourcePerf()}</div></div>`}
+function callerPerf(){return `<div class="table-wrap"><table><thead><tr><th>Caller</th><th>Assigned</th><th>Called</th><th>Connected</th><th>OPD</th></tr></thead><tbody>${dbstate.callers.map(u=>{let x=dbstate.leads.filter(l=>l.assigned_to===u.id);return `<tr><td>${esc(u.full_name)}</td><td>${x.length}</td><td>${x.filter(l=>l.calling_status!=='not_called').length}</td><td>${x.filter(l=>l.calling_status==='connected').length}</td><td>${x.filter(l=>l.opd_status==='opd_booked').length}</td></tr>`}).join('')}</tbody></table></div>`}
+function myPerf(){let l=dbstate.leads;return [['My Leads',l.length],['Pending',l.filter(x=>x.calling_status==='not_called').length],['Follow-ups',l.filter(x=>x.calling_status==='follow_up').length],['OPD Booked',l.filter(x=>x.opd_status==='opd_booked').length]].map(x=>`<div style="display:flex;justify-content:space-between;margin:12px 0;font-size:13px"><span>${x[0]}</span><b>${x[1]}</b></div>`).join('')}
+function sourcePerf(){return `<div class="table-wrap"><table><thead><tr><th>Source</th><th>Leads</th><th>Called</th><th>OPD</th></tr></thead><tbody>${dbstate.sources.map(s=>{let x=dbstate.leads.filter(l=>l.source_id===s.id);return `<tr><td>${esc(s.name)}</td><td>${x.length}</td><td>${x.filter(l=>l.calling_status!=='not_called').length}</td><td>${x.filter(l=>l.opd_status==='opd_booked').length}</td></tr>`}).join('')}</tbody></table></div>`}
 function renderLeads(){
   $('actions').innerHTML='<button class="btn primary" id="newLead">+ Add New Lead</button>';
   $('content').innerHTML=`<div class="panel" style="margin-top:0"><div class="filters lead-filters">
@@ -623,10 +545,38 @@ function renderLeads(){
   $('newLead').onclick=()=>openNewLead();
   $('selectAllPage').addEventListener('change',toggleSelectAllPage);
   if(me.role==='admin')$('bulkAssign').onclick=bulkAssignSelected;
+  restoreLeadFilterState();
   updateLeads();
 }
 let leadPage=1;
 let leadSelected=new Set();
+let savedLeadFilterState=null;
+
+function captureLeadFilterState(){
+  if(!$('q'))return;
+  savedLeadFilterState={
+    q:$('q').value,
+    fc:$('fc').value,
+    fs:$('fs').value,
+    fh:$('fh').value,
+    fa:$('fa').value,
+    fst:$('fst').value,
+    fopd:$('fopd').value,
+    fvisit:$('fvisit').value,
+    fcdfrom:$('fcdfrom').value,
+    fcdto:$('fcdto').value,
+    pageSize:$('pageSize')?.value||'100',
+    page:leadPage
+  };
+}
+function restoreLeadFilterState(){
+  if(!savedLeadFilterState)return;
+  const s=savedLeadFilterState;
+  ['q','fc','fs','fh','fa','fst','fopd','fvisit','fcdfrom','fcdto'].forEach(id=>{if($(id)&&s[id]!==undefined)$(id).value=s[id]});
+  if($('pageSize')&&s.pageSize)$('pageSize').value=s.pageSize;
+  leadPage=Number(s.page||1);
+  savedLeadFilterState=null;
+}
 function clearLeadSelection(){leadSelected.clear();if($('selectAllPage'))$('selectAllPage').checked=false}
 function getFilteredLeads(){
   let q=($('q')?.value||'').toLowerCase(),c=$('fc')?.value,s=$('fs')?.value,h=$('fh')?.value,a=$('fa')?.value,st=$('fst')?.value,opd=$('fopd')?.value,visit=$('fvisit')?.value,cdfrom=$('fcdfrom')?.value,cdto=$('fcdto')?.value;
@@ -649,27 +599,159 @@ function renderPagination(total,pageSize){let pages=Math.max(1,Math.ceil(total/p
 function updateLeads(){
   let x=getFilteredLeads(),ps=Number($('pageSize')?.value||100),pages=Math.max(1,Math.ceil(x.length/ps));if(leadPage>pages)leadPage=pages;let rows=x.slice((leadPage-1)*ps,(leadPage-1)*ps+ps);
   $('leadCount').textContent=`${x.length} lead${x.length===1?'':'s'} found`;
-  $('leadTable').innerHTML=rows.length?`<div class="table-wrap"><table><thead><tr><th><input id="headerSelect" class="row-check" type="checkbox"></th><th>Patient</th><th>Phone</th><th>Source</th><th>Campaign</th><th>Hospital</th><th>Assigned</th><th>Calling Date</th><th>Status</th><th>OPD</th><th>Visit</th><th></th></tr></thead><tbody>${rows.map(l=>`<tr><td><input class="row-check lead-row-check" type="checkbox" data-lead-check="${l.id}" ${leadSelected.has(l.id)?'checked':''}></td><td><b>${esc(l.patient_name)}</b><br><span class="small muted">#${l.lead_number}</span></td><td>${esc(l.phone)}</td><td>${esc(l.source?.name||'—')}</td><td>${esc(l.campaign?.name||'—')}</td><td>${esc(l.hospital||'—')}</td><td>${esc(l.assignee?.full_name||'Unassigned')}</td><td>${date(l.calling_date)||'—'}</td><td>${pill(l.calling_status)}</td><td>${esc(OPD[l.opd_status]||l.opd_status||'—')}</td><td>${esc(l.visit||'—')}</td><td><button class="btn secondary" data-open="${l.id}">Edit</button></td></tr>`).join('')}</tbody></table></div>`:'<div class="empty">No leads match the filters.</div>';
+  $('leadTable').innerHTML=rows.length?`<div class="table-wrap"><table><thead><tr><th><input id="headerSelect" class="row-check" type="checkbox"></th><th>Patient</th><th>Phone</th><th>Source</th><th>Campaign</th><th>Hospital</th><th>Assigned</th><th>Calling Date</th><th>Status</th><th>OPD</th><th>Visit</th><th></th></tr></thead><tbody>${rows.map(l=>`<tr><td><input class="row-check lead-row-check" type="checkbox" data-lead-check="${l.id}" ${leadSelected.has(l.id)?'checked':''}></td><td><b>${esc(l.patient_name)}</b><br><span class="small muted">#${l.lead_number}</span></td><td>${esc(l.phone)}</td><td>${esc(l.source?.name||'—')}</td><td>${esc(l.campaign?.name||'—')}</td><td>${esc(l.hospital||'—')}</td><td>${esc(l.assignee?.full_name||'Unassigned')}</td><td>${date(l.calling_date)||'—'}</td><td>${pill(l.calling_status)}</td><td>${l.opd_status==='opd_booked'?`<span class="pill success">${esc(settingLabel('opd_status','opd_booked','OPD Booked'))}</span>`:esc(settingLabel('opd_status',l.opd_status,OPD[l.opd_status]||l.opd_status||'—'))}</td><td>${esc(l.visit||'—')}</td><td><button class="btn secondary" data-open="${l.id}">Edit</button></td></tr>`).join('')}</tbody></table></div>`:'<div class="empty">No leads match the filters.</div>';
   document.querySelectorAll('[data-open]').forEach(b=>b.onclick=()=>openLead(b.dataset.open));
   document.querySelectorAll('[data-lead-check]').forEach(b=>b.onchange=()=>toggleLeadSelection(b.dataset.leadCheck,b.checked));
   let hs=$('headerSelect');if(hs)hs.onchange=()=>{let checked=hs.checked,x=getFilteredLeads(),ps=Number($('pageSize').value||100),rows=x.slice((leadPage-1)*ps,(leadPage-1)*ps+ps);rows.forEach(l=>checked?leadSelected.add(l.id):leadSelected.delete(l.id));document.querySelectorAll('.lead-row-check').forEach(c=>c.checked=checked);if($('selectAllPage'))$('selectAllPage').checked=checked;updateSelectedCount()};
   renderPagination(x.length,ps);syncSelectAllPage();updateSelectedCount();refreshPendingBadge();
 }
 async function bulkAssignSelected(){if(me.role!=='admin')return;if(!leadSelected.size)return toast('Select at least one lead');const target=$('bulkAssignee').value;if(!target)return toast('Choose a caller or Unassign selected');const ids=Array.from(leadSelected),assigned_to=target==='__unassigned__'?null:target,callerName=target==='__unassigned__'?'Unassigned':(dbstate.callers.find(u=>u.id===target)?.full_name||'caller');if(!confirm(`Assign ${ids.length} lead${ids.length===1?'':'s'} to ${callerName}?`))return;const u=await db.from('leads').update({assigned_to,updated_at:new Date().toISOString()}).in('id',ids);if(u.error)return toast(u.error.message);if(assigned_to){const ar=await db.from('lead_assignments').insert(ids.map(id=>({lead_id:id,assigned_to,assigned_by:me.id})));if(ar.error)console.warn('Assignment history insert failed:',ar.error)}clearLeadSelection();$('bulkAssignee').value='';await loadAll();updateLeads();toast(`${ids.length} lead${ids.length===1?'':'s'} assigned`)}
-async function openLead(id){let l=dbstate.leads.find(x=>x.id===id);if(!l)return;let logs=(await db.from('call_logs').select('*, caller:profiles(full_name)').eq('lead_id',id).order('called_at',{ascending:false})).data||[];$('modal').innerHTML=`<div class="modal-box"><div class="panel-head"><div><h2 style="margin:0">Edit Lead</h2><div class="small muted">#${l.lead_number}</div></div><button class="btn secondary" id="closeM">Close</button></div><div class="form-grid"><label>Patient Name<input id="pn" value="${esc(l.patient_name)}"></label><label>Phone<input id="ph" value="${esc(l.phone)}"></label><label>Campaign<select id="c"><option value="">Select campaign</option>${dbstate.campaigns.map(c=>`<option value="${c.id}" ${l.campaign_id===c.id?'selected':''}>${esc(c.name)}</option>`).join('')}</select></label><label>Lead Source<select id="src"><option value="">Select source</option>${dbstate.sources.map(s=>`<option value="${s.id}" ${l.source_id===s.id?'selected':''}>${esc(s.name)}</option>`).join('')}</select></label><label>Hospital<select id="h"><option value="">Select hospital</option>${settingOptions('hospital').length?settingOptions('hospital').map(x=>`<option value="${esc(x.label)}" ${l.hospital===x.label?'selected':''}>${esc(x.label)}</option>`).join(''):'<option value="EHRC" '+(l.hospital==='EHRC'?'selected':'')+'>EHRC</option><option value="Altius" '+(l.hospital==='Altius'?'selected':'')+'>Altius</option>'}</select></label><label>Coupon Code<input id="cc" placeholder="Optional coupon code" value="${esc(l.coupon_code||'')}"></label><label>Calling Status<select id="s">${statusOptionHtml('calling_status',Object.fromEntries(Object.entries(STATUS).filter(([k])=>k!=='opd_booked')),l.calling_status)}</select></label><label>Calling Date<input id="calld" type="date" value="${l.calling_date||''}"></label><label>OPD Status<select id="o">${statusOptionHtml('opd_status',OPD,l.opd_status)}</select></label><label>Visit<select id="v"><option value="">Select visit</option>${(settingOptions('visit').length?settingOptions('visit').map(x=>`<option value="${esc(x.label)}" ${l.visit===x.label?'selected':''}>${esc(x.label)}</option>`).join(''):'<option value="Completed" '+(l.visit==='Completed'?'selected':'')+'>Completed</option><option value="No Show" '+(l.visit==='No Show'?'selected':'')+'>No Show</option>')}</select></label><label>Follow-up Date<input id="fd" type="date" value="${l.follow_up_date||''}"></label><label>Follow-up Time<input id="ft" type="time" value="${l.follow_up_time||''}"></label>${me.role==='admin'?`<label>Assigned To<select id="a"><option value="">Unassigned</option>${dbstate.callers.map(u=>`<option value="${u.id}" ${l.assigned_to===u.id?'selected':''}>${esc(u.full_name)}</option>`).join('')}</select></label>`:''}<label>Remarks<input id="r" value="${esc(l.remarks||'')}"></label>${(dbstate.settings.fields||[]).map(f=>`<label>${esc(f.label)}${fieldTypeInput({field_type:f.field_type,default_value:l.custom_data?.[f.field_key]||''},'cf_'+f.field_key)}</label>`).join('')}</div><div class="modal-actions"><button class="btn primary" id="save">Save Changes</button></div><div style="font-weight:700;font-size:13px;margin-top:18px">Call Timeline</div><div class="timeline">${logs.length?logs.map(x=>`<div class="timeline-item"><div class="timeline-time">${dt(x.called_at)} · ${esc(x.caller?.full_name)}</div><div><b>${esc(STATUS[x.calling_status])}</b>${x.remarks?' — '+esc(x.remarks):''}</div></div>`).join(''):'<span class="muted small">No calls logged yet.</span>'}</div></div>`;$('modal').classList.remove('hidden');$('closeM').onclick=()=>closeModal();$('save').onclick=()=>saveLead(l)}
+async function openLead(id){
+  captureLeadFilterState();
+  let l=dbstate.leads.find(x=>x.id===id);
+  if(!l)return;
+
+  let logs=(await db.from('call_logs').select('*, caller:profiles(full_name)').eq('lead_id',id).order('called_at',{ascending:false})).data||[];
+  let bookings=(dbstate.opdBookings||[]).filter(b=>b.lead_id===id);
+
+  $('modal').innerHTML=`<div class="modal-box">
+    <div class="panel-head">
+      <div><h2 style="margin:0">Edit Lead</h2><div class="small muted">#${l.lead_number}</div></div>
+      <button class="btn secondary" id="closeM">Close</button>
+    </div>
+
+    <div class="form-grid">
+      <label>Patient Name<input id="pn" value="${esc(l.patient_name)}"></label>
+      <label>Phone<input id="ph" value="${esc(l.phone)}"></label>
+      <label>Campaign<select id="c"><option value="">Select campaign</option>${dbstate.campaigns.map(c=>`<option value="${c.id}" ${l.campaign_id===c.id?'selected':''}>${esc(c.name)} · ${date(c.campaign_date)}</option>`).join('')}</select></label>
+      <label>Lead Source<select id="src"><option value="">Select source</option>${dbstate.sources.map(s=>`<option value="${s.id}" ${l.source_id===s.id?'selected':''}>${esc(s.name)}</option>`).join('')}</select></label>
+      <label>Hospital<select id="h"><option value="">Select hospital</option>${settingOptions('hospital').length?settingOptions('hospital').map(x=>`<option value="${esc(x.label)}" ${l.hospital===x.label?'selected':''}>${esc(x.label)}</option>`).join(''):'<option value="EHRC" '+(l.hospital==='EHRC'?'selected':'')+'>EHRC</option><option value="Altius" '+(l.hospital==='Altius'?'selected':'')+'>Altius</option>'}</select></label>
+      <label>Coupon Code<input id="cc" placeholder="Optional coupon code" value="${esc(l.coupon_code||'')}"></label>
+      <label>Calling Status<select id="s">${statusOptionHtml('calling_status',Object.fromEntries(Object.entries(STATUS).filter(([k])=>k!=='opd_booked')),l.calling_status)}</select></label>
+      <label>Calling Date<input id="calld" type="date" value="${l.calling_date||''}"></label>
+      <label>OPD Status<select id="o">${statusOptionHtml('opd_status',OPD,l.opd_status)}</select></label>
+      <label>Visit<select id="v"><option value="">Select visit</option>${(settingOptions('visit').length?settingOptions('visit').map(x=>`<option value="${esc(x.label)}" ${l.visit===x.label?'selected':''}>${esc(x.label)}</option>`).join(''):'<option value="Completed" '+(l.visit==='Completed'?'selected':'')+'>Completed</option><option value="No Show" '+(l.visit==='No Show'?'selected':'')+'>No Show</option>')}</select></label>
+      <label>Follow-up Date<input id="fd" type="date" value="${l.follow_up_date||''}"></label>
+      <label>Follow-up Time<input id="ft" type="time" value="${l.follow_up_time||''}"></label>
+      ${me.role==='admin'?`<label>Assigned To<select id="a"><option value="">Unassigned</option>${dbstate.callers.map(u=>`<option value="${u.id}" ${l.assigned_to===u.id?'selected':''}>${esc(u.full_name)}</option>`).join('')}</select></label>`:''}
+      <label>Remarks<input id="r" value="${esc(l.remarks||'')}"></label>
+      ${(dbstate.settings.fields||[]).map(f=>`<label>${esc(f.label)}${fieldTypeInput({field_type:f.field_type,default_value:l.custom_data?.[f.field_key]||''},'cf_'+f.field_key)}</label>`).join('')}
+    </div>
+
+    <div class="modal-actions">
+      <button class="btn secondary" id="addBooking">+ Add OPD Booking</button>
+      <button class="btn primary" id="save">Save Changes</button>
+    </div>
+
+    <div style="font-weight:700;font-size:13px;margin-top:18px">OPD Booking History</div>
+    <div class="table-wrap" style="margin-top:10px">
+      <table>
+        <thead><tr><th>#</th><th>Campaign</th><th>Hospital</th><th>Booking Date</th><th>Status</th></tr></thead>
+        <tbody>
+          ${bookings.length?bookings.map((b,i)=>`<tr><td>${i+1}</td><td>${esc(b.campaign?.name||'—')}</td><td>${esc(b.hospital_name||'—')}</td><td>${date(b.booking_date)||'—'}</td><td>${esc(b.booking_status||'booked')}</td></tr>`).join(''):'<tr><td colspan="5" class="muted">No OPD bookings recorded yet.</td></tr>'}
+        </tbody>
+      </table>
+    </div>
+
+    <div style="font-weight:700;font-size:13px;margin-top:18px">Call Timeline</div>
+    <div class="timeline">${logs.length?logs.map(x=>`<div class="timeline-item"><div class="timeline-time">${dt(x.called_at)} · ${esc(x.caller?.full_name)}</div><div><b>${esc(settingLabel('calling_status',x.calling_status,STATUS[x.calling_status]||x.calling_status))}</b>${x.remarks?' — '+esc(x.remarks):''}</div></div>`).join(''):'<span class="muted small">No calls logged yet.</span>'}</div>
+  </div>`;
+
+  $('modal').classList.remove('hidden');
+  $('closeM').onclick=()=>closeModal();
+  $('save').onclick=()=>saveLead(l);
+  $('addBooking').onclick=()=>openAddBooking(l);
+}
+
+function openAddBooking(l){
+  const existingCampaign=dbstate.campaigns.find(c=>c.id===l.campaign_id);
+  $('modal2').innerHTML=`<div class="modal-box" style="max-width:620px">
+    <div class="panel-head"><div><h2 style="margin:0">Add OPD Booking</h2><div class="small muted">${esc(l.patient_name)} · ${esc(l.phone)}</div></div><button class="btn secondary" id="bookingClose">Close</button></div>
+    <div class="form-grid">
+      <label>Campaign<select id="bCampaign"><option value="">Select campaign</option>${dbstate.campaigns.map(c=>`<option value="${c.id}" ${l.campaign_id===c.id?'selected':''}>${esc(c.name)} · ${date(c.campaign_date)}</option>`).join('')}</select></label>
+      <label>Hospital<select id="bHospital"><option value="">Select hospital</option>${settingOptions('hospital').length?settingOptions('hospital').map(x=>`<option value="${esc(x.label)}" ${(l.hospital||existingCampaign?.location)===x.label?'selected':''}>${esc(x.label)}</option>`).join(''):'<option value="EHRC">EHRC</option><option value="Altius">Altius</option>'}</select></label>
+      <label>Booking Date<input id="bDate" type="date" value="${existingCampaign?.campaign_date||new Date().toISOString().slice(0,10)}"></label>
+      <label>Doctor Name<input id="bDoctor" placeholder="Optional"></label>
+      <label>Department<input id="bDept" placeholder="Optional"></label>
+      <label>Booking Status<select id="bStatus"><option value="booked">Booked</option><option value="cancelled">Cancelled</option><option value="completed">Completed</option><option value="no_show">No Show</option></select></label>
+      <label style="grid-column:1/-1">Notes<textarea id="bNotes" placeholder="Optional booking notes"></textarea></label>
+    </div>
+    <div class="notice" id="bookingWarning" style="display:none;margin-top:12px"></div>
+    <div class="modal-actions"><button class="btn primary" id="bookingSave">Add Booking</button></div>
+  </div>`;
+  $('modal2').classList.remove('hidden');
+  $('bookingClose').onclick=()=>$('modal2').classList.add('hidden');
+
+  const checkDuplicate=()=>{
+    const cid=$('bCampaign').value,bd=$('bDate').value;
+    const same=(dbstate.opdBookings||[]).filter(b=>b.lead_id===l.id && b.campaign_id===cid && String(b.booking_date||'').slice(0,10)===bd && b.booking_status!=='cancelled');
+    const w=$('bookingWarning');
+    if(same.length){
+      w.style.display='block';
+      w.textContent='This patient already has an OPD booking for the same campaign and date. You can add another booking if this is genuinely a separate booking.';
+    }else w.style.display='none';
+  };
+  $('bCampaign').onchange=checkDuplicate;
+  $('bDate').onchange=checkDuplicate;
+  $('bookingSave').onclick=async()=>{
+    const campaign_id=$('bCampaign').value, booking_date=$('bDate').value||null, hospital_name=$('bHospital').value||null;
+    if(!campaign_id)return toast('Select a campaign');
+    const dup=(dbstate.opdBookings||[]).filter(b=>b.lead_id===l.id&&b.campaign_id===campaign_id&&String(b.booking_date||'').slice(0,10)===booking_date&&b.booking_status!=='cancelled');
+    if(dup.length&&!confirm('A booking with the same campaign and date already exists for this patient. Add another booking anyway?'))return;
+    const r=await db.from('opd_bookings').insert({
+      lead_id:l.id,campaign_id,booking_date,hospital_name,
+      doctor_name:$('bDoctor').value.trim()||null,
+      department:$('bDept').value.trim()||null,
+      booking_status:$('bStatus').value,
+      notes:$('bNotes').value.trim()||null,
+      created_by:me.id
+    }).select().single();
+    if(r.error)return toast(r.error.message);
+    // Keep lead status in sync.
+    await db.from('leads').update({opd_status:'opd_booked',updated_at:new Date().toISOString()}).eq('id',l.id);
+    $('modal2').classList.add('hidden');
+    await loadAll();
+    closeModal();
+    go('leads');
+    toast('OPD booking added');
+  };
+}
 function openNewLead(){
   $('modal').innerHTML=`<div class="modal-box"><div class="panel-head"><div><h2 style="margin:0">Add New Lead</h2><div class="small muted">Create a lead directly in the CRM.</div></div><button class="btn secondary" id="newClose">Close</button></div><div class="form-grid"><label>Patient Name<input id="npn" placeholder="Patient name"></label><label>Phone<input id="nph" placeholder="Phone number"></label><label>Campaign<select id="nc"><option value="">Select campaign</option>${uniqueCampaigns().map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select></label><label>Lead Source<select id="ns"><option value="">Select source</option>${dbstate.sources.map(s=>`<option value="${s.id}">${esc(s.name)}</option>`).join('')}</select></label><label>Hospital<select id="nh"><option value="">Select hospital</option>${settingOptions('hospital').length?settingOptions('hospital').map(x=>`<option value="${esc(x.label)}">${esc(x.label)}</option>`).join(''):'<option value="EHRC">EHRC</option><option value="Altius">Altius</option>'}</select></label><label>Coupon Code<input id="ncc" placeholder="Optional coupon code"></label>${me.role==='admin'?`<label>Assigned To<select id="na"><option value="">Unassigned</option>${dbstate.callers.map(u=>`<option value="${u.id}">${esc(u.full_name)}</option>`).join('')}</select></label>`:''}<label>Calling Status<select id="nst">${statusOptionHtml('calling_status',Object.fromEntries(Object.entries(STATUS).filter(([k])=>k!=='opd_booked')),'not_called')}</select></label><label>Calling Date<input id="ncalld" type="date"></label><label>OPD Status<select id="no">${statusOptionHtml('opd_status',OPD,'not_discussed')}</select></label><label>Visit<select id="nv"><option value="">Select visit</option>${(settingOptions('visit').length?settingOptions('visit').map(x=>`<option value="${esc(x.label)}">${esc(x.label)}</option>`).join(''):'<option value="Completed">Completed</option><option value="No Show">No Show</option>')}</select></label><label>Follow-up Date<input id="nfd" type="date"></label><label>Follow-up Time<input id="nft" type="time"></label><label>Remarks<input id="nr" placeholder="Optional remarks"></label></div><div class="modal-actions"><button class="btn primary" id="createLead">Add Lead</button></div></div>`;
   $('modal').classList.remove('hidden');
   $('newClose').onclick=closeModal;
   $('createLead').onclick=saveNewLead;
 }
+function openDuplicateLeadChoice(l){
+  $('modal2').innerHTML=`<div class="modal-box" style="max-width:560px">
+    <div class="panel-head"><div><h2 style="margin:0">Existing Lead Found</h2><div class="small muted">The phone number already exists for this campaign.</div></div><button class="btn secondary" id="dupClose">Close</button></div>
+    <div class="notice"><b>${esc(l.patient_name)}</b><br>${esc(l.phone)}<br>Campaign: ${esc(l.campaign?.name||'—')}</div>
+    <div class="modal-actions" style="margin-top:16px">
+      <button class="btn secondary" id="openExisting">Open Existing Lead</button>
+      <button class="btn primary" id="newBooking">+ Add OPD Booking</button>
+    </div>
+  </div>`;
+  $('modal2').classList.remove('hidden');
+  $('dupClose').onclick=()=>$('modal2').classList.add('hidden');
+  $('openExisting').onclick=()=>{ $('modal2').classList.add('hidden'); openLead(l.id); };
+  $('newBooking').onclick=()=>{ $('modal2').classList.add('hidden'); openAddBooking(l); };
+}
+
 async function saveNewLead(){
   let name=$('npn').value.trim(),phone=$('nph').value.trim(),campaign_id=$('nc').value,source_id=$('ns').value,hospital=$('nh').value||null,coupon_code=$('ncc').value.trim()||null;
   if(!name||!phone||!campaign_id||!source_id)return toast('Name, phone, campaign and source are required');
   let assigned=me.role==='admin'?($('na').value||null):me.id;
   let r=await db.rpc('add_lead_manual',{p_patient_name:name,p_phone:phone,p_source_id:source_id,p_campaign_id:campaign_id,p_assigned_to:assigned,p_calling_status:$('nst').value,p_opd_status:$('no').value,p_follow_up_date:$('nfd').value||null,p_follow_up_time:$('nft').value||null,p_remarks:$('nr').value.trim()||null,p_hospital:hospital,p_coupon_code:coupon_code});
   if(r.error)return toast(r.error.message);
-  if(r.data?.duplicate)return toast('A lead with this phone already exists in this campaign');
+  if(r.data?.duplicate){
+    const matches=(await db.from('leads').select('*, campaign:campaigns(name,campaign_date), source:lead_sources(name), assignee:profiles!leads_assigned_to_fkey(full_name)').eq('normalized_phone',phone.replace(/\D/g,'').slice(-10)).eq('campaign_id',campaign_id).limit(1)).data||[];
+    const existingLead=matches[0];
+    if(existingLead){
+      openDuplicateLeadChoice(existingLead);
+      return;
+    }
+    return toast('A lead with this phone already exists in this campaign');
+  }
 
   // The manual RPC may return different shapes depending on the deployed
   // database function. Re-query the newly-created lead by phone + campaign
@@ -707,7 +789,7 @@ async function saveNewLead(){
   toast('New lead added');
 }
 function closeModal(){$('modal').classList.add('hidden')}
-async function saveLead(l){let custom_data={...(l.custom_data||{})};(dbstate.settings.fields||[]).forEach(f=>{const el=$('cf_'+f.field_key);if(el)custom_data[f.field_key]=el.value||null});let patch={patient_name:$('pn').value.trim(),phone:$('ph').value.trim(),campaign_id:$('c').value,source_id:$('src').value,calling_status:$('s').value,opd_status:$('o').value,calling_date:$('calld').value||null,visit:$('v').value||null,follow_up_date:$('fd').value||null,follow_up_time:$('ft').value||null,remarks:$('r').value.trim()||null,hospital:$('h').value||null,coupon_code:$('cc').value.trim()||null,custom_data,updated_at:new Date().toISOString()};if(!patch.patient_name||!patch.phone||!patch.campaign_id||!patch.source_id)return toast('Name, phone, campaign and source are required');if(me.role==='admin')patch.assigned_to=$('a').value||null;let u=await db.from('leads').update(patch).eq('id',l.id);if(u.error)return toast(u.error.message);await db.from('call_logs').insert({lead_id:l.id,caller_id:me.id,calling_status:patch.calling_status,remarks:patch.remarks});if(patch.calling_status==='follow_up')await db.from('follow_ups').insert({lead_id:l.id,assigned_to:patch.assigned_to||l.assigned_to||me.id,follow_up_date:patch.follow_up_date||new Date().toISOString().slice(0,10),follow_up_time:patch.follow_up_time,notes:patch.remarks});if(patch.opd_status==='opd_booked'){let q=await db.from('opd_bookings').select('id').eq('lead_id',l.id).limit(1);if(!q.data?.length)await db.from('opd_bookings').insert({lead_id:l.id,created_by:me.id,booking_status:'booked'})}await loadAll();closeModal();go('leads');toast('Lead updated')}
+async function saveLead(l){let custom_data={...(l.custom_data||{})};(dbstate.settings.fields||[]).forEach(f=>{const el=$('cf_'+f.field_key);if(el)custom_data[f.field_key]=el.value||null});let patch={patient_name:$('pn').value.trim(),phone:$('ph').value.trim(),campaign_id:$('c').value,source_id:$('src').value,calling_status:$('s').value,opd_status:$('o').value,calling_date:$('calld').value||null,visit:$('v').value||null,follow_up_date:$('fd').value||null,follow_up_time:$('ft').value||null,remarks:$('r').value.trim()||null,hospital:$('h').value||null,coupon_code:$('cc').value.trim()||null,custom_data,updated_at:new Date().toISOString()};if(!patch.patient_name||!patch.phone||!patch.campaign_id||!patch.source_id)return toast('Name, phone, campaign and source are required');if(me.role==='admin')patch.assigned_to=$('a').value||null;let u=await db.from('leads').update(patch).eq('id',l.id);if(u.error)return toast(u.error.message);await db.from('call_logs').insert({lead_id:l.id,caller_id:me.id,calling_status:patch.calling_status,remarks:patch.remarks});if(patch.calling_status==='follow_up')await db.from('follow_ups').insert({lead_id:l.id,assigned_to:patch.assigned_to||l.assigned_to||me.id,follow_up_date:patch.follow_up_date||new Date().toISOString().slice(0,10),follow_up_time:patch.follow_up_time,notes:patch.remarks});await loadAll();closeModal();go('leads');toast('Lead updated')}
 function uniqueCampaigns(){const seen=new Set(),out=[];for(const c of dbstate.campaigns){const k=`${String(c.name||'').trim().toLowerCase()}|${c.campaign_date||''}`;if(!seen.has(k)){seen.add(k);out.push(c)}}return out}
 function renderCampaigns(){if(me.role!=='admin')return;$('actions').innerHTML='<button class="btn primary" id="newC">+ New Campaign</button>';$('content').innerHTML=`<div class="panel" style="margin-top:0"><div class="table-wrap"><table><thead><tr><th>Campaign</th><th>Date</th><th>Status</th><th>Coupon Code</th><th>Leads</th><th>Assigned</th><th>OPD</th><th>Action</th></tr></thead><tbody>${dbstate.campaigns.map(c=>{let x=dbstate.leads.filter(l=>l.campaign_id===c.id);return `<tr><td><b>${esc(c.name)}</b>${c.location?`<br><span class="small muted">${esc(c.location)}</span>`:''}</td><td>${date(c.campaign_date)}</td><td>${esc(c.status)}</td><td>${c.coupon_code?`<span class="pill">${esc(c.coupon_code)}</span>`:'—'}</td><td>${x.length}</td><td>${x.filter(l=>l.assigned_to).length}</td><td>${x.filter(l=>l.opd_status==='opd_booked').length}</td><td><div style="display:flex;gap:8px;justify-content:flex-end"><button class="btn secondary" data-edit-campaign="${c.id}">Edit</button><button class="btn danger" data-delete-campaign="${c.id}">Delete</button></div></td></tr>`}).join('')}</tbody></table></div></div>`;$('newC').onclick=()=>openCampaign();document.querySelectorAll('[data-edit-campaign]').forEach(b=>b.onclick=()=>openCampaign(b.dataset.editCampaign));document.querySelectorAll('[data-delete-campaign]').forEach(b=>b.onclick=()=>deleteCampaign(b.dataset.deleteCampaign))}
 async function deleteCampaign(id){
@@ -725,7 +807,7 @@ async function deleteCampaign(id){
   toast(`Campaign "${c.name}" deleted`);
 }
 
-function openCampaign(id){let existing=id?dbstate.campaigns.find(c=>c.id===id):null;let title=existing?'Edit Campaign':'Create Campaign';$('modal').innerHTML=`<div class="modal-box"><div class="panel-head"><h2 style="margin:0">${title}</h2><button class="btn secondary" id="cx">Close</button></div><div class="form-grid"><label>Campaign Name<input id="cn" placeholder="BALA X Camp" value="${esc(existing?.name||'')}"></label><label>Campaign Date<input id="cd" type="date" value="${esc(existing?.campaign_date||'')}"></label><label>Status<select id="cs"><option value="active" ${existing?.status==='active'?'selected':''}>Active</option><option value="draft" ${existing?.status==='draft'?'selected':''}>Draft</option><option value="completed" ${existing?.status==='completed'?'selected':''}>Completed</option></select></label><label>Location<input id="cl" value="${esc(existing?.location||'')}"></label><label>Coupon Code<input id="cco" placeholder="e.g. ORTHO500" value="${esc(existing?.coupon_code||'')}"></label></div><label style="margin-top:14px">Notes<textarea id="cno">${esc(existing?.notes||'')}</textarea></label><div class="modal-actions"><button class="btn primary" id="cgo">${existing?'Save Changes':'Create'}</button></div></div>`;$('modal').classList.remove('hidden');$('cx').onclick=closeModal;$('cgo').onclick=async()=>{
+function openCampaign(id){let existing=id?dbstate.campaigns.find(c=>c.id===id):null;let title=existing?'Edit Campaign':'Create Campaign';$('modal').innerHTML=`<div class="modal-box"><div class="panel-head"><h2 style="margin:0">${title}</h2><button class="btn secondary" id="cx">Close</button></div><div class="form-grid"><label>Campaign Name<input id="cn" placeholder="BALA X Camp" value="${esc(existing?.name||'')}"></label><label>Campaign Date<input id="cd" type="date" value="${esc(existing?.campaign_date||'')}"></label><label>Status<select id="cs"><option value="active" ${existing?.status==='active'?'selected':''}>Active</option><option value="draft" ${existing?.status==='draft'?'selected':''}>Draft</option><option value="completed" ${existing?.status==='completed'?'selected':''}>Completed</option></select></label><label>Hospital<input id="cl" placeholder="e.g. Altius" value="${esc(existing?.location||'')}"></label><label>Coupon Code<input id="cco" placeholder="e.g. ORTHO500" value="${esc(existing?.coupon_code||'')}"></label></div><label style="margin-top:14px">Notes<textarea id="cno">${esc(existing?.notes||'')}</textarea></label><div class="modal-actions"><button class="btn primary" id="cgo">${existing?'Save Changes':'Create'}</button></div></div>`;$('modal').classList.remove('hidden');$('cx').onclick=closeModal;$('cgo').onclick=async()=>{
   let p={name:$('cn').value.trim(),campaign_date:$('cd').value,status:$('cs').value,location:$('cl').value,notes:$('cno').value,coupon_code:$('cco').value.trim()||null};
   if(!p.name||!p.campaign_date)return toast('Campaign name and date are required');
   if(!existing){
@@ -733,9 +815,20 @@ function openCampaign(id){let existing=id?dbstate.campaigns.find(c=>c.id===id):n
     if(dup.error)return toast(dup.error.message);
     if((dup.data||[]).length)return toast('This campaign already exists for this date. Use the existing campaign.');
   }
-  let r=existing?await db.from('campaigns').update(p).eq('id',existing.id):await db.from('campaigns').insert({...p,created_by:me.id});
+  let r=existing?await db.from('campaigns').update(p).eq('id',existing.id).select().single():await db.from('campaigns').insert({...p,created_by:me.id}).select().single();
   if(r.error)return toast(r.error.message);
-  await loadAll();closeModal();renderCampaigns();toast(existing?'Campaign updated':'Campaign created');
+
+  // Campaign-level Hospital/Coupon Code becomes the default for every lead under it.
+  const savedCampaign=r.data;
+  const leadPatch={
+    hospital:p.location||null,
+    coupon_code:p.coupon_code||null,
+    updated_at:new Date().toISOString()
+  };
+  const lr=await db.from('leads').update(leadPatch).eq('campaign_id',savedCampaign.id);
+  if(lr.error)return toast('Campaign saved, but lead defaults could not be updated: '+lr.error.message);
+
+  await loadAll();closeModal();renderCampaigns();toast(existing?'Campaign and lead defaults updated':'Campaign created');
 }}
 function settingLabel(category,key,fallback){
   const x=(dbstate.settings.options||[]).find(v=>v.category===category && v.value_key===key && v.is_active);
@@ -997,5 +1090,6 @@ $('logout').onclick=async()=>{await db.auth.signOut();location.reload()};
 start().catch(e=>{console.error(e);$('loginError').textContent=e.message||'Unable to start CRM'});
 
 </script>
+<div id="modal2" class="screen center hidden"></div>
 </body>
 </html>
