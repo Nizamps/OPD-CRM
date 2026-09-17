@@ -1370,9 +1370,210 @@ async function renderSettings(){
   });
 }
 
-function renderImport(){if(me.role!=='admin')return;$('content').innerHTML=`<div class="panel" style="margin-top:0"><div class="notice">CSV import is still available for one-off files. For live Meta / WhatsApp CTA / RCS / Hospital streams, use <b>Google Sheets</b> in the menu.</div><div class="modal-actions"><button class="btn primary" onclick="go('sheets')">Connect Google Sheet</button></div></div>`}
-function csvRows(t){let out=[],row=[],cell='',q=false;for(let i=0;i<t.length;i++){let ch=t[i],nx=t[i+1];if(ch==='"'&&nx==='"'){cell+='"';i++;continue}if(ch==='"'){q=!q;continue}if(ch===','&&!q){row.push(cell);cell='';continue}if((ch==='\n'||ch==='\r')&&!q){if(ch==='\r'&&nx==='\n')i++;row.push(cell);if(row.some(v=>v.trim()))out.push(row);row=[];cell='';continue}cell+=ch}if(cell||row.length){row.push(cell);out.push(row)}return out}
-async function importCSV(){let f=$('if').files[0],campaign_id=$('ic').value,source_id=$('is').value;if(!f||!campaign_id||!source_id)return toast('Choose campaign, source and CSV');let rows=csvRows(await f.text()),head=rows.shift().map(x=>x.trim().toLowerCase()),ni=head.indexOf('patient_name')>=0?head.indexOf('patient_name'):head.indexOf('name'),pi=head.indexOf('phone')>=0?head.indexOf('phone'):head.indexOf('mobile');if(ni<0||pi<0)return toast('CSV needs name and phone');let existing=new Set(dbstate.leads.map(l=>String(l.phone).replace(/\D/g,'').slice(-10))),ids=dbstate.callers.map(x=>x.id),added=0,dup=0,ci=0;for(let row of rows){let name=(row[ni]||'').trim(),phone=(row[pi]||'').replace(/\D/g,'');if(!name||!phone)continue;let key=phone.slice(-10);if(existing.has(key)){dup++;continue}existing.add(key);let assigned=$('ia').value==='round'?(ids[ci++%ids.length]||null):null;let r=await db.from('leads').insert({patient_name:name,phone,source_id,campaign_id,assigned_to:assigned});if(!r.error)added++}await loadLeads();toast(`Imported ${added} · duplicates skipped ${dup}`)}
+function renderImport(){
+  if(me.role!=='admin')return;
+  $('actions').innerHTML='<button class="btn primary" id="topImportCsv">📥 Import CSV</button>';
+  $('content').innerHTML=`
+    <div class="panel" style="margin-top:0">
+      <div class="panel-head">
+        <div>
+          <h2 style="margin:0">Import Leads via CSV</h2>
+          <div class="small muted" style="margin-top:4px">Upload a CSV file, choose the campaign and lead source, then import the leads directly into the CRM.</div>
+        </div>
+        <span class="pill">Admin only</span>
+      </div>
+
+      <div class="notice" style="margin-top:14px">
+        <b>Required CSV columns:</b> Patient Name and Phone. Common names such as <code>name</code>, <code>patient_name</code>, <code>phone</code>, <code>mobile</code> and <code>phone_number</code> are supported.
+      </div>
+
+      <div class="form-grid" style="margin-top:16px">
+        <label>CSV File
+          <input id="if" type="file" accept=".csv,text/csv">
+        </label>
+        <label>Campaign
+          <select id="ic"><option value="">Select campaign</option>${uniqueCampaigns().map(c=>`<option value="${c.id}">${esc(c.name)} · ${esc(c.campaign_date||'')}</option>`).join('')}</select>
+        </label>
+        <label>Lead Source
+          <select id="is"><option value="">Select lead source</option>${dbstate.sources.map(x=>`<option value="${x.id}">${esc(x.name)}</option>`).join('')}</select>
+        </label>
+        <label>Assignment
+          <select id="ia"><option value="round">Round-robin assign to callers</option><option value="none">Leave unassigned</option></select>
+        </label>
+        <label>Default Hospital <span class="small muted">(optional)</span>
+          <input id="iHospital" placeholder="e.g. Altius Hospitals">
+        </label>
+        <label>Default Coupon Code <span class="small muted">(optional)</span>
+          <input id="iCoupon" placeholder="e.g. ORTHO20">
+        </label>
+      </div>
+
+      <div id="importFileInfo" class="small muted" style="margin-top:12px">No CSV selected.</div>
+      <div id="importPreview" style="margin-top:14px"></div>
+
+      <div class="modal-actions" style="margin-top:18px">
+        <button class="btn secondary" id="previewCsv">Preview CSV</button>
+        <button class="btn primary" id="runCsvImport">📥 Import Leads</button>
+        <button class="btn secondary" id="downloadCsvTemplate">Download CSV Template</button>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-head"><div><b>What gets imported</b><div class="small muted" style="margin-top:4px">Optional columns are imported when present.</div></div></div>
+      <div class="small" style="line-height:1.8">
+        <b>Supported fields:</b> Patient Name, Phone, Alternate Phone, Hospital, Coupon Code, Calling Status, OPD Status, Calling Date, Visit, Remarks, Referral, Referred By.
+      </div>
+      <div class="notice" style="margin-top:12px">The importer prevents the same patient + phone from being imported twice into the same campaign, while still allowing the same phone number for different patient names.</div>
+    </div>`;
+
+  $('topImportCsv').onclick=()=>document.getElementById('if').click();
+  $('if').onchange=()=>showCsvPreview(false);
+  $('previewCsv').onclick=()=>showCsvPreview(true);
+  $('runCsvImport').onclick=importCSV;
+  $('downloadCsvTemplate').onclick=downloadImportTemplate;
+
+  async function showCsvPreview(forceToast){
+    const f=$('if').files[0];
+    if(!f){$('importFileInfo').textContent='No CSV selected.';$('importPreview').innerHTML='';if(forceToast)toast('Choose a CSV file first');return;}
+    try{
+      const rows=csvRows(await f.text());
+      if(!rows.length){$('importPreview').innerHTML='<div class="notice danger">The CSV is empty.</div>';return;}
+      const rawHead=rows[0].map(x=>String(x||'').trim());
+      const head=rawHead.map(x=>normalizeImportHeader(x));
+      const ni=findImportColumn(head,['patient_name','name','patient','patientname']);
+      const pi=findImportColumn(head,['phone','mobile','phone_number','mobile_number','contact','contact_number']);
+      $('importFileInfo').innerHTML=`Selected: <b>${esc(f.name)}</b> · ${rows.length-1} data row(s) · ${(f.size/1024).toFixed(1)} KB`;
+      if(ni<0||pi<0){$('importPreview').innerHTML='<div class="notice danger">CSV needs Patient Name and Phone columns.</div>';if(forceToast)toast('CSV needs name and phone');return;}
+      const sample=rows.slice(1,6).filter(r=>r.some(v=>String(v||'').trim()));
+      $('importPreview').innerHTML=`<div class="small muted" style="margin-bottom:8px">Detected columns: <b>${esc(rawHead.join(', '))}</b></div>`+
+        (sample.length?`<div class="table-wrap"><table><thead><tr><th>Patient Name</th><th>Phone</th><th>Hospital</th><th>Coupon</th></tr></thead><tbody>${sample.map(r=>`<tr><td>${esc(r[ni]||'')}</td><td>${esc(r[pi]||'')}</td><td>${esc(r[findImportColumn(head,['hospital','hospital_name'])]||'')}</td><td>${esc(r[findImportColumn(head,['coupon_code','coupon','promo_code'])]||'')}</td></tr>`).join('')}</tbody></table></div>`:'');
+      if(forceToast)toast(`CSV ready · ${rows.length-1} row(s)`);
+    }catch(e){console.error(e);$('importPreview').innerHTML='<div class="notice danger">Unable to read this CSV file.</div>';if(forceToast)toast('Unable to read CSV');}
+  }
+
+  function downloadImportTemplate(){
+    const header='patient_name,phone,alternate_phone,hospital,coupon_code,calling_status,opd_status,calling_date,visit,remarks,is_referral,referred_by';
+    const example='John Doe,9876543210,9988776655,Altius Hospitals,ORTHO20,not_called,not_discussed,2026-09-20,,Imported from CSV,no,';
+    const blob=new Blob([header+'\\n'+example+'\\n'],{type:'text/csv;charset=utf-8'});
+    const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='opd_crm_lead_import_template.csv';document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(a.href),500);
+  }
+}
+
+function normalizeImportHeader(x){return String(x||'').toLowerCase().trim().replace(/[\s-]+/g,'_').replace(/[^a-z0-9_]/g,'')}
+function findImportColumn(head,names){for(const n of names){const i=head.indexOf(n);if(i>=0)return i}return -1}
+function normalizeImportPhone(x){return String(x??'').replace(/\D/g,'').slice(-10)}
+function normalizeImportName(x){return String(x??'').trim().toLowerCase().replace(/\s+/g,' ')}
+function importEnumValue(value, allowed, fallback){
+  const raw=String(value??'').trim().toLowerCase();
+  if(!raw)return fallback;
+  if(allowed.includes(raw))return raw;
+  const map={
+    'not called':'not_called','connected':'connected','dnp':'dnp','busy':'busy','switched off':'switched_off','wrong number':'wrong_number','interested':'interested','not interested':'not_interested','follow up':'follow_up','follow-up':'follow_up','opd booked':'opd_booked','call back':'call_back',
+    'not discussed':'not_discussed','opd recommended':'opd_recommended','opd completed':'opd_completed','no show':'no_show','cancelled':'cancelled'
+  };
+  return map[raw]&&allowed.includes(map[raw])?map[raw]:fallback;
+}
+async function importCSV(){
+  const f=$('if').files[0],campaign_id=$('ic').value,source_id=$('is').value;
+  if(!f||!campaign_id||!source_id)return toast('Choose campaign, source and CSV');
+  if(!/\.csv$/i.test(f.name))return toast('Please select a CSV file');
+  const button=$('runCsvImport');
+  button.disabled=true;
+  button.textContent='Importing…';
+  try{
+    const rows=csvRows(await f.text());
+    if(!rows.length)throw new Error('CSV is empty');
+    const rawHead=rows.shift();
+    const head=rawHead.map(normalizeImportHeader);
+    const ni=findImportColumn(head,['patient_name','name','patient','patientname']);
+    const pi=findImportColumn(head,['phone','mobile','phone_number','mobile_number','contact','contact_number']);
+    if(ni<0||pi<0)throw new Error('CSV needs Patient Name and Phone columns');
+
+    const findCol=(names)=>findImportColumn(head,names);
+    const ai=findCol(['alternate_phone','alt_phone','alternate_mobile']);
+    const hi=findCol(['hospital','hospital_name']);
+    const coi=findCol(['coupon_code','coupon','promo_code']);
+    const si=findCol(['calling_status','call_status','status']);
+    const oi=findCol(['opd_status','opd']);
+    const di=findCol(['calling_date','call_date']);
+    const vi=findCol(['visit','visit_status']);
+    const ri=findCol(['remarks','comments','comment','notes']);
+    const refl=findCol(['is_referral','referral','referral_flag']);
+    const rby=findCol(['referred_by','referrer','referral_by']);
+
+    const existing=new Set((dbstate.leads||[]).filter(l=>l.campaign_id===campaign_id).map(l=>`${normalizeImportName(l.patient_name)}|${normalizeImportPhone(l.phone)}`));
+    const callers=(dbstate.callers||[]).filter(x=>x.is_active!==false);
+    const useRound=$('ia').value==='round';
+    const defaultHospital=$('iHospital').value.trim()||null;
+    const defaultCoupon=$('iCoupon').value.trim()||null;
+    let nextCaller=0,added=0,dup=0,invalid=0,failed=0;
+    const importBatch=Date.now();
+    const payload=[];
+    const seenInFile=new Set();
+    const allowedCalling=['not_called','connected','dnp','busy','switched_off','wrong_number','interested','not_interested','follow_up','opd_booked','call_back'];
+    const allowedOpd=['not_discussed','interested','opd_recommended','opd_booked','opd_completed','no_show','cancelled'];
+    const truthy=new Set(['yes','y','true','1']);
+
+    for(let idx=0;idx<rows.length;idx++){
+      const row=rows[idx];
+      const name=String(row[ni]||'').trim();
+      const phoneRaw=String(row[pi]||'').trim();
+      const phone=phoneRaw.replace(/\D/g,'');
+      const phoneKey=normalizeImportPhone(phone);
+      if(!name||phoneKey.length<10){invalid++;continue;}
+      const key=`${normalizeImportName(name)}|${phoneKey}`;
+      if(existing.has(key)||seenInFile.has(key)){dup++;continue;}
+      seenInFile.add(key);
+      let assigned_to=null;
+      if(useRound&&callers.length){assigned_to=callers[nextCaller%callers.length].id;nextCaller++;}
+      const hospital=hi>=0&&String(row[hi]||'').trim()?String(row[hi]).trim():defaultHospital;
+      const coupon_code=coi>=0&&String(row[coi]||'').trim()?String(row[coi]).trim():defaultCoupon;
+      const calling_status=importEnumValue(si>=0?row[si]:'',allowedCalling,'not_called');
+      const opd_status=importEnumValue(oi>=0?row[oi]:'',allowedOpd,'not_discussed');
+      const visit=vi>=0&&String(row[vi]||'').trim()?String(row[vi]).trim():null;
+      const is_referral=refl>=0?truthy.has(String(row[refl]||'').trim().toLowerCase()):false;
+      payload.push({
+        patient_name:name,
+        phone:phoneRaw,
+        alternate_phone:ai>=0&&String(row[ai]||'').trim()?String(row[ai]).trim():null,
+        source_id,
+        campaign_id,
+        assigned_to,
+        calling_status,
+        opd_status,
+        calling_date:di>=0&&String(row[di]||'').trim()?String(row[di]).trim():null,
+        visit,
+        remarks:ri>=0&&String(row[ri]||'').trim()?String(row[ri]).trim():null,
+        hospital,
+        coupon_code,
+        is_referral,
+        referred_by:rby>=0&&String(row[rby]||'').trim()?String(row[rby]).trim():null,
+        source_row_key:`csv:${campaign_id}:${source_id}:${importBatch}:${idx+2}`
+      });
+      existing.add(key);
+    }
+
+    for(let i=0;i<payload.length;i+=200){
+      const batch=payload.slice(i,i+200);
+      const r=await db.from('leads').insert(batch);
+      if(r.error){
+        console.error('CSV batch import failed:',r.error);
+        failed+=batch.length;
+      }else added+=batch.length;
+    }
+    await loadAll();
+    $('if').value='';
+    $('importFileInfo').textContent='No CSV selected.';
+    $('importPreview').innerHTML='';
+    toast(`Imported ${added} · duplicates skipped ${dup} · invalid ${invalid} · failed ${failed}`);
+  }catch(e){
+    console.error('CSV import failed:',e);
+    toast(e?.message||'CSV import failed');
+  }finally{
+    button.disabled=false;
+    button.textContent='📥 Import Leads';
+  }
+}
 function renderSheets(){
   if(me.role!=='admin')return;
   let rows=dbstate.sheetConnections||[];
