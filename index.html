@@ -1117,10 +1117,19 @@ function openCampaign(id){
     };
 
     if(!p.name||!p.campaign_date)return toast('Campaign name and date are required');
-    if(!existing){
-      const dup=await db.from('campaigns').select('id,name,campaign_date').ilike('name',p.name).eq('campaign_date',p.campaign_date);
-      if(dup.error)return toast(dup.error.message);
-      if((dup.data||[]).length)return toast('This campaign already exists for this date. Use the existing campaign.');
+    // Duplicate rule: only the SAME campaign name + SAME date is blocked.
+    // Different campaign names on the same date are allowed.
+    {
+      const sameDate=await db.from('campaigns').select('id,name,campaign_date').eq('campaign_date',p.campaign_date);
+      if(sameDate.error)return toast(sameDate.error.message);
+      const wantedName=String(p.name||'').trim().toLowerCase();
+      const dup=(sameDate.data||[]).find(c =>
+        c.id!==existing?.id &&
+        String(c.name||'').trim().toLowerCase()===wantedName
+      );
+      if(dup){
+        return toast('This campaign name already exists for this date. Use the existing campaign or choose a different campaign name.');
+      }
     }
 
     let r=existing
