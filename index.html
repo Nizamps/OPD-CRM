@@ -412,31 +412,39 @@ async function start(){
     $('login').classList.remove('hidden');
     return;
   }
-  $('login').classList.add('hidden');
+
   try{
     const s=await db.auth.getSession();
     session=s.data?.session||null;
+
     if(!session){
-      me=null;
       $('app').classList.add('hidden');
       $('login').classList.remove('hidden');
       return;
     }
+
+    // Load the profile first. Authentication is considered successful once
+    // the signed-in user's profile is available.
     await loadMe();
-    await loadAll();
+
+    try{
+      await loadAll();
+    }catch(dataErr){
+      console.error('CRM data load failed:',dataErr);
+      toast('Signed in, but some CRM data could not be loaded. You can refresh.');
+    }
+
     showApp();
   }catch(e){
-    console.error('CRM startup failed:',e);
+    console.error('CRM startup/login restore failed:',e);
+    session=null;
+    me=null;
     $('app').classList.add('hidden');
     $('login').classList.remove('hidden');
-    const msg=e?.message||'Unable to load CRM';
+
+    const msg=e?.message||'Unable to restore your session';
     const er=$('loginError');
-    if(er) er.textContent='CRM could not load your account/data: '+msg+' Please sign in again or retry.';
-    // Only clear the browser session for clear authentication failures.
-    if(/jwt|token|refresh token|invalid session|session not found/i.test(msg)){
-      try{await db.auth.signOut({scope:'local'});}catch(_){}
-      session=null; me=null;
-    }
+    if(er) er.textContent=msg;
   }
 }
 db.auth.onAuthStateChange((event,newSession)=>{
@@ -489,7 +497,13 @@ async function loadLeads(){
   }
   dbstate.leads=all;
 }
-function showApp(){$('login').classList.add('hidden');$('app').classList.remove('hidden');$('userInfo').textContent=`${me.full_name} · ${me.role}`;buildNav();go('dashboard')}
+function showApp(){
+  $('login').classList.add('hidden');
+  $('app').classList.remove('hidden');
+  $('userInfo').textContent=`${me?.full_name||'User'} · ${me?.role||'user'}`;
+  buildNav();
+  go('dashboard');
+}
 function getPendingCallCount(){
   if(!me) return 0;
   return dbstate.leads.filter(l=>l.assigned_to===me.id && l.calling_status==='not_called').length;
@@ -1473,9 +1487,48 @@ function filtered(){let c=$('ec').value,s=$('es').value,a=$('ea').value,st=$('es
 function previewExport(){let x=filtered();if($('edfrom').value&&$('edto').value&&$('edfrom').value>$('edto').value)return;$('ecount').innerHTML=`<div class="notice">${x.length} lead${x.length===1?'':'s'} match the selected filters.</div>`}
 function doExport(){let x=filtered();if($('edfrom').value&&$('edto').value&&$('edfrom').value>$('edto').value)return;if(!x.length)return toast('No leads match');let rows=[['Lead #','Patient Name','Phone','Source','Campaign','Campaign Date','Hospital','Assigned To','Calling Date','Calling Status','Follow-up Date','OPD Status','Visit','Remarks'],...x.map(l=>[l.lead_number,l.patient_name,l.phone,l.source?.name,l.campaign?.name,l.campaign?.campaign_date,l.hospital||'',l.assignee?.full_name||'',l.calling_date||'',STATUS[l.calling_status],l.follow_up_date,OPD[l.opd_status],l.visit||'',l.remarks||''])];let csv=rows.map(r=>r.map(v=>`"${String(v??'').replaceAll('"','""')}"`).join(',')).join('\n');let a=document.createElement('a');a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));a.download='OPD_CRM_Export.csv';a.click();toast(`Exported ${x.length} leads`)}
 function renderUsers(){if(me.role!=='admin')return;$('content').innerHTML=`<div class="panel" style="margin-top:0"><div class="notice">Create users under Supabase Authentication → Users. The schema trigger creates their profile. Promote one profile to Admin using the SQL comment in <b>supabase/schema.sql</b>.</div><div class="table-wrap" style="margin-top:16px"><table><thead><tr><th>Name</th><th>Role</th><th>Status</th></tr></thead><tbody>${[me,...dbstate.callers.filter(x=>x.id!==me.id)].map(u=>`<tr><td>${esc(u.full_name)}</td><td>${esc(u.role)}</td><td>${u.is_active?'Active':'Disabled'}</td></tr>`).join('')}</tbody></table></div></div>`}
-$('loginForm').addEventListener('submit',async e=>{e.preventDefault();$('loginError').textContent='';let r=await db.auth.signInWithPassword({email:$('email').value,password:$('password').value});if(r.error){$('loginError').textContent=r.error.message;return}session=r.data.session;await loadMe();await loadAll();showApp()});
+$('loginForm').addEventListener('submit',async e=>{
+  e.preventDefault();
+  $('loginError').textContent='';
+  const btn=$('loginForm').querySelector('button[type="submit"]');
+  if(btn){btn.disabled=true;btn.textContent='Signing in…';}
+
+  try{
+    const r=await db.auth.signInWithPassword({
+      email:$('email').value.trim(),
+      password:$('password').value
+    });
+
+    if(r.error){
+      $('loginError').textContent=r.error.message;
+      return;
+    }
+
+    session=r.data.session;
+    await loadMe();
+
+    try{
+      await loadAll();
+    }catch(dataErr){
+      console.error('Post-login data load failed:',dataErr);
+      toast('Login successful. Some CRM data could not be loaded.');
+    }
+
+    showApp();
+  }catch(err){
+    console.error('Login failed:',err);
+    $('loginError').textContent=err?.message||'Unable to sign in';
+  }finally{
+    if(btn){btn.disabled=false;btn.textContent='Sign in →';}
+  }
+});
 $('logout').onclick=async()=>{await db.auth.signOut();location.reload()};
-start().catch(e=>{console.error(e);$('loginError').textContent=e.message||'Unable to start CRM'});
+start().catch(e=>{
+  console.error(e);
+  $('app').classList.add('hidden');
+  $('login').classList.remove('hidden');
+  $('loginError').textContent=e?.message||'Unable to start CRM';
+});
 
 </script>
 <div id="modal2" class="screen center hidden"></div>
