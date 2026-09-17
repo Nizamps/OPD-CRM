@@ -455,6 +455,9 @@ setInterval(async()=>{
 },60000);
 async function loadMe(){const r=await db.from('profiles').select('*').eq('id',session.user.id).single();if(r.error)throw r.error;me=r.data}
 async function loadAll(){let qs=[db.from('campaigns').select('*').order('campaign_date',{ascending:false}),db.from('lead_sources').select('*').eq('is_active',true).order('name'),db.from('profiles').select('*').eq('is_active',true).order('full_name')];if(me.role==='admin')qs.push(db.from('sheet_connections').select('*, source:lead_sources(name), campaign:campaigns(name,campaign_date)').order('created_at',{ascending:false}));let r=await Promise.all(qs);dbstate.campaigns=r[0].data||[];dbstate.sources=r[1].data||[];dbstate.callers=(r[2].data||[]).filter(x=>x.role==='caller');dbstate.sheetConnections=(me.role==='admin'?(r[3]?.data||[]):[]);
+  const ch=await db.from('campaign_hospitals').select('*').order('hospital');
+  dbstate.campaignHospitals=ch.data||[];
+  if(ch.error)console.warn('Campaign hospital mappings unavailable:',ch.error.message);
   if(me.role==='admin'){
     try{
       const [optRes,fieldRes]=await Promise.all([
@@ -706,7 +709,7 @@ async function openLead(id){
       <label>Phone<input id="ph" value="${esc(l.phone)}"></label>
       <label>Campaign<select id="c"><option value="">Select campaign</option>${dbstate.campaigns.map(c=>`<option value="${c.id}" ${l.campaign_id===c.id?'selected':''}>${esc(c.name)} · ${date(c.campaign_date)}</option>`).join('')}</select></label>
       <label>Lead Source<select id="src"><option value="">Select source</option>${dbstate.sources.map(s=>`<option value="${s.id}" ${l.source_id===s.id?'selected':''}>${esc(s.name)}</option>`).join('')}</select></label><label>Referral<select id="referralType"><option value="no" ${!l.is_referral?'selected':''}>No</option><option value="yes" ${l.is_referral?'selected':''}>Yes</option></select></label><label>Referred By<input id="referredBy" placeholder="Optional" value="${esc(l.referred_by||'')}"></label>
-      <label>Hospital<select id="h"><option value="">Select hospital</option>${settingOptions('hospital').length?settingOptions('hospital').map(x=>`<option value="${esc(x.label)}" ${l.hospital===x.label?'selected':''}>${esc(x.label)}</option>`).join(''):'<option value="EHRC" '+(l.hospital==='EHRC'?'selected':'')+'>EHRC</option><option value="Altius" '+(l.hospital==='Altius'?'selected':'')+'>Altius</option>'}</select></label>
+      <label>Hospital<select id="h">${hospitalOptionsForCampaign(l.campaign_id,l.hospital)}</select></label>
       <label>Coupon Code<input id="cc" placeholder="Optional coupon code" value="${esc(l.coupon_code||'')}"></label>
       <label>Calling Status<select id="s">${statusOptionHtml('calling_status',Object.fromEntries(Object.entries(STATUS).filter(([k])=>k!=='opd_booked')),l.calling_status)}</select></label>
       <label>Calling Date<input id="calld" type="date" value="${l.calling_date||''}"></label>
@@ -742,6 +745,13 @@ async function openLead(id){
   $('closeM').onclick=()=>closeModal();
   $('save').onclick=()=>saveLead(l);
   $('addBooking').onclick=()=>openAddBooking(l);
+  $('c').addEventListener('change',()=>{
+    const current=$('h').value;
+    $('h').innerHTML=hospitalOptionsForCampaign($('c').value,current);
+    const mapped=getCampaignHospitals($('c').value);
+    if(mapped.length===1)$('h').value=mapped[0];
+    else if(mapped.includes(current))$('h').value=current;
+  });
 }
 
 function openAddBooking(l){
@@ -802,6 +812,17 @@ function openNewLead(){
   $('modal').classList.remove('hidden');
   $('newClose').onclick=closeModal;
   $('createLead').onclick=saveNewLead;
+  const refreshNewLeadHospitals=()=>{
+    const cid=$('nc').value;
+    const current=$('nh').value;
+    const mapped=getCampaignHospitals(cid);
+    const names=mapped.length?mapped:settingOptions('hospital').map(x=>x.label);
+    $('nh').innerHTML='<option value="">Select hospital</option>'+names.map(h=>`<option value="${esc(h)}">${esc(h)}</option>`).join('');
+    if(names.length===1)$('nh').value=names[0];
+    else if(names.includes(current))$('nh').value=current;
+  };
+  $('nc').addEventListener('change',refreshNewLeadHospitals);
+  refreshNewLeadHospitals();
 }
 function openDuplicateLeadChoice(l){
   $('modal2').innerHTML=`<div class="modal-box" style="max-width:560px">
@@ -835,7 +856,8 @@ async function saveNewLead(){
   if(normalizedPhone.length!==10)return toast('Enter a valid 10-digit phone number');
 
   const selectedCampaign=dbstate.campaigns.find(c=>c.id===campaign_id);
-  if(!hospital)hospital=selectedCampaign?.location||null;
+  const mappedHospitals=getCampaignHospitals(campaign_id);
+  if(!hospital && mappedHospitals.length===1)hospital=mappedHospitals[0];
   if(!coupon_code)coupon_code=selectedCampaign?.coupon_code||null;
 
   let assigned=me.role==='admin'?($('na')?.value||null):me.id;
@@ -984,7 +1006,41 @@ async function saveNewLead(){
 function closeModal(){$('modal').classList.add('hidden')}
 async function saveLead(l){let custom_data={...(l.custom_data||{})};(dbstate.settings.fields||[]).forEach(f=>{const el=$('cf_'+f.field_key);if(el)custom_data[f.field_key]=el.value||null});let patch={patient_name:$('pn').value.trim(),phone:$('ph').value.trim(),campaign_id:$('c').value,source_id:$('src').value,calling_status:$('s').value,opd_status:$('o').value,calling_date:$('calld').value||null,visit:$('v').value||null,follow_up_date:$('fd').value||null,follow_up_time:$('ft').value||null,remarks:$('r').value.trim()||null,hospital:$('h').value||null,coupon_code:$('cc').value.trim()||null,is_referral:$('referralType').value==='yes',referred_by:$('referredBy').value.trim()||null,custom_data,updated_at:new Date().toISOString()};if(!patch.patient_name||!patch.phone||!patch.campaign_id||!patch.source_id)return toast('Name, phone, campaign and source are required');if(me.role==='admin')patch.assigned_to=$('a').value||null;let u=await db.from('leads').update(patch).eq('id',l.id);if(u.error)return toast(u.error.message);await db.from('call_logs').insert({lead_id:l.id,caller_id:me.id,calling_status:patch.calling_status,remarks:patch.remarks});if(patch.calling_status==='follow_up')await db.from('follow_ups').insert({lead_id:l.id,assigned_to:patch.assigned_to||l.assigned_to||me.id,follow_up_date:patch.follow_up_date||new Date().toISOString().slice(0,10),follow_up_time:patch.follow_up_time,notes:patch.remarks});await loadAll();closeModal();go('leads');toast('Lead updated')}
 function uniqueCampaigns(){const seen=new Set(),out=[];for(const c of dbstate.campaigns){const k=`${String(c.name||'').trim().toLowerCase()}|${c.campaign_date||''}`;if(!seen.has(k)){seen.add(k);out.push(c)}}return out}
-function renderCampaigns(){if(me.role!=='admin')return;$('actions').innerHTML='<button class="btn primary" id="newC">+ New Campaign</button>';$('content').innerHTML=`<div class="panel" style="margin-top:0"><div class="table-wrap"><table><thead><tr><th>Campaign</th><th>Date</th><th>Status</th><th>Coupon Code</th><th>Leads</th><th>Assigned</th><th>OPD</th><th>Action</th></tr></thead><tbody>${dbstate.campaigns.map(c=>{let x=dbstate.leads.filter(l=>l.campaign_id===c.id);return `<tr><td><b>${esc(c.name)}</b>${c.location?`<br><span class="small muted">${esc(c.location)}</span>`:''}</td><td>${date(c.campaign_date)}</td><td>${esc(c.status)}</td><td>${c.coupon_code?`<span class="pill">${esc(c.coupon_code)}</span>`:'—'}</td><td>${x.length}</td><td>${x.filter(l=>l.assigned_to).length}</td><td>${x.filter(l=>l.opd_status==='opd_booked').length}</td><td><div style="display:flex;gap:8px;justify-content:flex-end"><button class="btn secondary" data-edit-campaign="${c.id}">Edit</button><button class="btn danger" data-delete-campaign="${c.id}">Delete</button></div></td></tr>`}).join('')}</tbody></table></div></div>`;$('newC').onclick=()=>openCampaign();document.querySelectorAll('[data-edit-campaign]').forEach(b=>b.onclick=()=>openCampaign(b.dataset.editCampaign));document.querySelectorAll('[data-delete-campaign]').forEach(b=>b.onclick=()=>deleteCampaign(b.dataset.deleteCampaign))}
+function getCampaignHospitals(campaignId){
+  return (dbstate.campaignHospitals||[])
+    .filter(x=>x.campaign_id===campaignId && x.is_active!==false)
+    .map(x=>x.hospital)
+    .filter(Boolean);
+}
+function hospitalOptionsForCampaign(campaignId,selected){
+  const mapped=getCampaignHospitals(campaignId);
+  const names=mapped.length?mapped:settingOptions('hospital').map(x=>x.label);
+  return `<option value="">${names.length===1?'Select hospital':'Select hospital'}</option>`+
+    names.map(h=>`<option value="${esc(h)}" ${selected===h?'selected':''}>${esc(h)}</option>`).join('');
+}
+function renderCampaigns(){
+  if(me.role!=='admin')return;
+  $('actions').innerHTML='<button class="btn primary" id="newC">+ New Campaign</button>';
+  $('content').innerHTML=`<div class="panel" style="margin-top:0"><div class="table-wrap"><table>
+    <thead><tr><th>Campaign</th><th>Date</th><th>Status</th><th>Hospitals</th><th>Coupon Code</th><th>Leads</th><th>Assigned</th><th>OPD</th><th>Action</th></tr></thead>
+    <tbody>${dbstate.campaigns.map(c=>{
+      let x=dbstate.leads.filter(l=>l.campaign_id===c.id);
+      const hospitals=getCampaignHospitals(c.id);
+      const displayHospitals=hospitals.length?hospitals:(c.location?[c.location]:[]);
+      return `<tr>
+        <td><b>${esc(c.name)}</b></td>
+        <td>${date(c.campaign_date)}</td>
+        <td>${esc(c.status)}</td>
+        <td>${displayHospitals.length?displayHospitals.map(h=>`<span class="pill">${esc(h)}</span>`).join(' '):'—'}</td>
+        <td>${c.coupon_code?`<span class="pill">${esc(c.coupon_code)}</span>`:'—'}</td>
+        <td>${x.length}</td><td>${x.filter(l=>l.assigned_to).length}</td><td>${x.filter(l=>l.opd_status==='opd_booked').length}</td>
+        <td><div style="display:flex;gap:8px;justify-content:flex-end"><button class="btn secondary" data-edit-campaign="${c.id}">Edit</button><button class="btn danger" data-delete-campaign="${c.id}">Delete</button></div></td>
+      </tr>`;
+    }).join('')}</tbody></table></div></div>`;
+  $('newC').onclick=()=>openCampaign();
+  document.querySelectorAll('[data-edit-campaign]').forEach(b=>b.onclick=()=>openCampaign(b.dataset.editCampaign));
+  document.querySelectorAll('[data-delete-campaign]').forEach(b=>b.onclick=()=>deleteCampaign(b.dataset.deleteCampaign));
+}
 async function deleteCampaign(id){
   const c=dbstate.campaigns.find(x=>x.id===id);
   if(!c)return;
@@ -1000,29 +1056,83 @@ async function deleteCampaign(id){
   toast(`Campaign "${c.name}" deleted`);
 }
 
-function openCampaign(id){let existing=id?dbstate.campaigns.find(c=>c.id===id):null;let title=existing?'Edit Campaign':'Create Campaign';$('modal').innerHTML=`<div class="modal-box"><div class="panel-head"><h2 style="margin:0">${title}</h2><button class="btn secondary" id="cx">Close</button></div><div class="form-grid"><label>Campaign Name<input id="cn" placeholder="BALA X Camp" value="${esc(existing?.name||'')}"></label><label>Campaign Date<input id="cd" type="date" value="${esc(existing?.campaign_date||'')}"></label><label>Status<select id="cs"><option value="active" ${existing?.status==='active'?'selected':''}>Active</option><option value="draft" ${existing?.status==='draft'?'selected':''}>Draft</option><option value="completed" ${existing?.status==='completed'?'selected':''}>Completed</option></select></label><label>Hospital<input id="cl" placeholder="e.g. Altius" value="${esc(existing?.location||'')}"></label><label>Coupon Code<input id="cco" placeholder="e.g. ORTHO500" value="${esc(existing?.coupon_code||'')}"></label></div><label style="margin-top:14px">Notes<textarea id="cno">${esc(existing?.notes||'')}</textarea></label><div class="modal-actions"><button class="btn primary" id="cgo">${existing?'Save Changes':'Create'}</button></div></div>`;$('modal').classList.remove('hidden');$('cx').onclick=closeModal;$('cgo').onclick=async()=>{
-  let p={name:$('cn').value.trim(),campaign_date:$('cd').value,status:$('cs').value,location:$('cl').value,notes:$('cno').value,coupon_code:$('cco').value.trim()||null};
-  if(!p.name||!p.campaign_date)return toast('Campaign name and date are required');
-  if(!existing){
-    const dup=await db.from('campaigns').select('id,name,campaign_date').ilike('name',p.name).eq('campaign_date',p.campaign_date);
-    if(dup.error)return toast(dup.error.message);
-    if((dup.data||[]).length)return toast('This campaign already exists for this date. Use the existing campaign.');
-  }
-  let r=existing?await db.from('campaigns').update(p).eq('id',existing.id).select().single():await db.from('campaigns').insert({...p,created_by:me.id}).select().single();
-  if(r.error)return toast(r.error.message);
+function openCampaign(id){
+  let existing=id?dbstate.campaigns.find(c=>c.id===id):null;
+  let title=existing?'Edit Campaign':'Create Campaign';
+  const existingHospitals=existing?getCampaignHospitals(existing.id):[];
 
-  // Campaign-level Hospital/Coupon Code becomes the default for every lead under it.
-  const savedCampaign=r.data;
-  const leadPatch={
-    hospital:p.location||null,
-    coupon_code:p.coupon_code||null,
-    updated_at:new Date().toISOString()
+  $('modal').innerHTML=`<div class="modal-box">
+    <div class="panel-head"><h2 style="margin:0">${title}</h2><button class="btn secondary" id="cx">Close</button></div>
+    <div class="form-grid">
+      <label>Campaign Name<input id="cn" placeholder="BALA X Camp" value="${esc(existing?.name||'')}"></label>
+      <label>Campaign Date<input id="cd" type="date" value="${esc(existing?.campaign_date||'')}"></label>
+      <label>Status<select id="cs"><option value="active" ${existing?.status==='active'?'selected':''}>Active</option><option value="draft" ${existing?.status==='draft'?'selected':''}>Draft</option><option value="completed" ${existing?.status==='completed'?'selected':''}>Completed</option></select></label>
+      <label>Coupon Code<input id="cco" placeholder="e.g. ORTHO500" value="${esc(existing?.coupon_code||'')}"></label>
+    </div>
+
+    <div style="margin-top:15px">
+      <div class="filter-label" style="margin-bottom:8px">Hospitals</div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap">
+        ${settingOptions('hospital').map((h,i)=>{
+          const checked=existingHospitals.includes(h.label);
+          return `<label style="display:flex;align-items:center;gap:8px;border:1px solid var(--border,#d9e2ec);border-radius:12px;padding:10px 13px;width:auto">
+            <input class="campaign-hospital-check" type="checkbox" value="${esc(h.label)}" ${checked?'checked':''}>
+            <span>${esc(h.label)}</span>
+          </label>`;
+        }).join('')}
+      </div>
+      <div class="small muted" style="margin-top:8px">Select one or multiple hospitals. One campaign can run in both EHRC and Altius.</div>
+    </div>
+
+    <label style="margin-top:14px">Notes<textarea id="cno">${esc(existing?.notes||'')}</textarea></label>
+    <div class="modal-actions"><button class="btn primary" id="cgo">${existing?'Save Changes':'Create'}</button></div>
+  </div>`;
+
+  $('modal').classList.remove('hidden');
+  $('cx').onclick=closeModal;
+
+  $('cgo').onclick=async()=>{
+    let selectedHospitals=Array.from(document.querySelectorAll('.campaign-hospital-check:checked')).map(x=>x.value);
+    let p={
+      name:$('cn').value.trim(),
+      campaign_date:$('cd').value,
+      status:$('cs').value,
+      location:selectedHospitals.join(', ')||null,
+      notes:$('cno').value,
+      coupon_code:$('cco').value.trim()||null
+    };
+
+    if(!p.name||!p.campaign_date)return toast('Campaign name and date are required');
+    if(!existing){
+      const dup=await db.from('campaigns').select('id,name,campaign_date').ilike('name',p.name).eq('campaign_date',p.campaign_date);
+      if(dup.error)return toast(dup.error.message);
+      if((dup.data||[]).length)return toast('This campaign already exists for this date. Use the existing campaign.');
+    }
+
+    let r=existing
+      ?await db.from('campaigns').update(p).eq('id',existing.id).select().single()
+      :await db.from('campaigns').insert({...p,created_by:me.id}).select().single();
+
+    if(r.error)return toast(r.error.message);
+
+    const campaignId=r.data.id;
+
+    // Replace this campaign's hospital mapping with the current selection.
+    const del=await db.from('campaign_hospitals').delete().eq('campaign_id',campaignId);
+    if(del.error)return toast('Campaign saved, but hospital mappings could not be updated: '+del.error.message);
+
+    if(selectedHospitals.length){
+      const rows=selectedHospitals.map(h=>({campaign_id:campaignId,hospital:h,is_active:true}));
+      const ins=await db.from('campaign_hospitals').insert(rows);
+      if(ins.error)return toast('Campaign saved, but hospital mappings could not be saved: '+ins.error.message);
+    }
+
+    await loadAll();
+    closeModal();
+    renderCampaigns();
+    toast(existing?'Campaign and hospital mapping updated':'Campaign created');
   };
-  const lr=await db.from('leads').update(leadPatch).eq('campaign_id',savedCampaign.id);
-  if(lr.error)return toast('Campaign saved, but lead defaults could not be updated: '+lr.error.message);
-
-  await loadAll();closeModal();renderCampaigns();toast(existing?'Campaign and lead defaults updated':'Campaign created');
-}}
+}
 function settingLabel(category,key,fallback){
   const x=(dbstate.settings.options||[]).find(v=>v.category===category && v.value_key===key && v.is_active);
   return x?.label || fallback;
@@ -1240,39 +1350,124 @@ async function renderSettings(){
 function renderImport(){if(me.role!=='admin')return;$('content').innerHTML=`<div class="panel" style="margin-top:0"><div class="notice">CSV import is still available for one-off files. For live Meta / WhatsApp CTA / RCS / Hospital streams, use <b>Google Sheets</b> in the menu.</div><div class="modal-actions"><button class="btn primary" onclick="go('sheets')">Connect Google Sheet</button></div></div>`}
 function csvRows(t){let out=[],row=[],cell='',q=false;for(let i=0;i<t.length;i++){let ch=t[i],nx=t[i+1];if(ch==='"'&&nx==='"'){cell+='"';i++;continue}if(ch==='"'){q=!q;continue}if(ch===','&&!q){row.push(cell);cell='';continue}if((ch==='\n'||ch==='\r')&&!q){if(ch==='\r'&&nx==='\n')i++;row.push(cell);if(row.some(v=>v.trim()))out.push(row);row=[];cell='';continue}cell+=ch}if(cell||row.length){row.push(cell);out.push(row)}return out}
 async function importCSV(){let f=$('if').files[0],campaign_id=$('ic').value,source_id=$('is').value;if(!f||!campaign_id||!source_id)return toast('Choose campaign, source and CSV');let rows=csvRows(await f.text()),head=rows.shift().map(x=>x.trim().toLowerCase()),ni=head.indexOf('patient_name')>=0?head.indexOf('patient_name'):head.indexOf('name'),pi=head.indexOf('phone')>=0?head.indexOf('phone'):head.indexOf('mobile');if(ni<0||pi<0)return toast('CSV needs name and phone');let existing=new Set(dbstate.leads.map(l=>String(l.phone).replace(/\D/g,'').slice(-10))),ids=dbstate.callers.map(x=>x.id),added=0,dup=0,ci=0;for(let row of rows){let name=(row[ni]||'').trim(),phone=(row[pi]||'').replace(/\D/g,'');if(!name||!phone)continue;let key=phone.slice(-10);if(existing.has(key)){dup++;continue}existing.add(key);let assigned=$('ia').value==='round'?(ids[ci++%ids.length]||null):null;let r=await db.from('leads').insert({patient_name:name,phone,source_id,campaign_id,assigned_to:assigned});if(!r.error)added++}await loadLeads();toast(`Imported ${added} · duplicates skipped ${dup}`)}
-function renderSheets(){if(me.role!=='admin')return;
+function renderSheets(){
+  if(me.role!=='admin')return;
   let rows=dbstate.sheetConnections||[];
   $('actions').innerHTML='<button class="btn primary" id="addSheet">+ Connect Google Sheet</button>';
-  $('content').innerHTML=`<div class="panel" style="margin-top:0"><div class="panel-head"><div><b>Live Google Sheet Connections</b><div class="small muted" style="margin-top:4px">Connect each live source once. New rows are synced to Supabase automatically and assigned round-robin to your callers.</div></div></div>
-  <div class="table-wrap"><table><thead><tr><th>Sheet</th><th>Source</th><th>Campaign</th><th>Last Sync</th><th>Rows</th><th>Status</th></tr></thead><tbody>
-  ${rows.length?rows.map(x=>`<tr><td><b>${esc(x.name||x.sheet_url)}</b><br><span class="small muted">${esc(x.tab_name||'')}</span></td><td>${esc(x.source?.name||'')}</td><td>${esc(x.campaign?.name||'')}</td><td>${x.last_sync_at?dt(x.last_sync_at):'Never'}</td><td>${x.last_processed_row||1}</td><td>${x.last_sync_status==='error'?'<span class="pill danger">Error</span>':'<span class="pill success">Active</span>'}</td></tr>`).join(''):`<tr><td colspan="6" class="empty">No Google Sheets connected yet.</td></tr>`}
-  </tbody></table></div></div>
-  <div class="panel"><div class="notice"><b>Recommended setup:</b> connect Meta Leads, WhatsApp CTA, RCS and Hospital Dump as separate connections. Each connection can point to a different tab and campaign. The sync worker checks active connections automatically.</div></div>`;
-  $('addSheet').onclick=openSheetConnection;
-}
-function openSheetConnection(){
-  if(!GOOGLE_SYNC_URL)return toast('Set googleSyncUrl in the SUPABASE_CONFIG block first');
-  $('modal').innerHTML=`<div class="modal-box"><div class="panel-head"><div><h2 style="margin:0">Connect Google Sheet</h2><div class="small muted" style="margin-top:4px">Paste the Sheet URL. No CSV export is required.</div></div><button class="btn secondary" id="scx">Close</button></div>
-  <div class="form-grid">
-    <label>Connection Name<input id="scn" placeholder="Meta Leads - Sunday Camp"></label>
-    <label>Google Sheet URL<input id="scurl" placeholder="https://docs.google.com/spreadsheets/d/.../edit"></label>
-    <label>Sheet tab<input id="sctab" value="Sheet1" placeholder="Sheet1"></label>
-    <label>Lead Source<select id="scsrc"><option value="">Select source</option>${dbstate.sources.map(x=>`<option value="${x.id}">${esc(x.name)}</option>`).join('')}</select></label>
-    <label>Campaign<select id="sccamp"><option value="">Select campaign</option>${dbstate.campaigns.map(x=>`<option value="${x.id}">${esc(x.name)}</option>`).join('')}</select></label>
-    <label>Patient name column <span class="small muted">optional</span><input id="scname" placeholder="name / patient_name"></label>
-    <label>Phone column <span class="small muted">optional</span><input id="scphone" placeholder="phone / mobile"></label>
+  $('content').innerHTML=`<div class="panel" style="margin-top:0">
+    <div class="panel-head"><div><b>Live Google Sheet Connections</b><div class="small muted" style="margin-top:4px">Connect each source/tab to one campaign and set the Hospital + Coupon Code for the leads created by that connection.</div></div></div>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Sheet</th><th>Source</th><th>Campaign</th><th>Hospital</th><th>Coupon Code</th><th>Last Sync</th><th>Rows</th><th>Status</th><th>Action</th></tr></thead>
+      <tbody>
+      ${rows.length?rows.map(x=>`<tr>
+        <td><b>${esc(x.name||x.sheet_url)}</b><br><span class="small muted">${esc(x.tab_name||'')}</span></td>
+        <td>${esc(x.source?.name||'')}</td>
+        <td>${esc(x.campaign?.name||'')}</td>
+        <td>${x.hospital?esc(x.hospital):'—'}</td>
+        <td>${x.coupon_code?`<span class="pill">${esc(x.coupon_code)}</span>`:'—'}</td>
+        <td>${x.last_sync_at?dt(x.last_sync_at):'Never'}</td>
+        <td>${x.last_processed_row||1}</td>
+        <td>${x.last_sync_status==='error'?'<span class="pill danger">Error</span>':'<span class="pill success">Active</span>'}</td>
+        <td><div style="display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap">
+          <button class="btn secondary" data-edit-sheet="${x.id}">Edit</button>
+          <button class="btn secondary" data-sync-sheet="${x.id}">Sync</button>
+        </div></td>
+      </tr>`).join(''):`<tr><td colspan="9" class="empty">No Google Sheets connected yet.</td></tr>`}
+      </tbody>
+    </table></div>
   </div>
-  <div class="notice" style="margin-top:16px">The sync script uses your Google account's access to read the Sheet. Keep row 1 as headers and append new leads below the existing data.</div>
-  <div class="modal-actions"><button class="btn primary" id="scsave">Connect Sheet</button></div></div>`;
-  $('modal').classList.remove('hidden');$('scx').onclick=closeModal;$('scsave').onclick=saveSheetConnection;
+  <div class="panel"><div class="notice"><b>Tip:</b> You can use the same campaign for Meta Leads, WhatsApp CTA, RCS, etc. Each connection can have its own Hospital and Coupon Code.</div></div>`;
+
+  $('addSheet').onclick=()=>openSheetConnection();
+  document.querySelectorAll('[data-edit-sheet]').forEach(b=>b.onclick=()=>openSheetConnection(b.dataset.editSheet));
+  document.querySelectorAll('[data-sync-sheet]').forEach(b=>b.onclick=()=>syncSheetNow(b.dataset.syncSheet));
 }
-async function saveSheetConnection(){
-  let p={name:$('scn').value.trim()||'Google Sheet',sheet_url:$('scurl').value.trim(),tab_name:$('sctab').value.trim()||'Sheet1',source_id:$('scsrc').value,campaign_id:$('sccamp').value,name_column:$('scname').value.trim()||null,phone_column:$('scphone').value.trim()||null,created_by:me.id,active:true};
-  if(!p.sheet_url||!p.source_id||!p.campaign_id)return toast('Sheet URL, source and campaign are required');
-  let r=await db.from('sheet_connections').insert(p).select().single();if(r.error)return toast(r.error.message);
-  await loadAll();closeModal();renderSheets();toast('Google Sheet connected. New leads will sync automatically')
+function openSheetConnection(id){
+  if(!GOOGLE_SYNC_URL)return toast('Set googleSyncUrl in the SUPABASE_CONFIG block first');
+
+  const existing=id?(dbstate.sheetConnections||[]).find(x=>x.id===id):null;
+  const title=existing?'Edit Google Sheet Connection':'Connect Google Sheet';
+
+  $('modal').innerHTML=`<div class="modal-box">
+    <div class="panel-head">
+      <div><h2 style="margin:0">${title}</h2><div class="small muted" style="margin-top:4px">${existing?'Update the connection without resetting its sync position.':'Paste the Sheet URL. No CSV export is required.'}</div></div>
+      <button class="btn secondary" id="scx">Close</button>
+    </div>
+
+    <div class="form-grid">
+      <label>Connection Name<input id="scn" placeholder="Meta Leads - Ortho 20 Sept" value="${esc(existing?.name||'')}"></label>
+      <label>Google Sheet URL<input id="scurl" placeholder="https://docs.google.com/spreadsheets/d/.../edit" value="${esc(existing?.sheet_url||'')}"></label>
+      <label>Sheet tab<input id="sctab" value="${esc(existing?.tab_name||'Sheet1')}" placeholder="Sheet1"></label>
+      <label>Lead Source<select id="scsrc"><option value="">Select source</option>${dbstate.sources.map(x=>`<option value="${x.id}" ${existing?.source_id===x.id?'selected':''}>${esc(x.name)}</option>`).join('')}</select></label>
+      <label>Campaign<select id="sccamp"><option value="">Select campaign</option>${uniqueCampaigns().map(x=>`<option value="${x.id}" ${existing?.campaign_id===x.id?'selected':''}>${esc(x.name)} · ${date(x.campaign_date)}</option>`).join('')}</select></label>
+      <label>Hospital<select id="schospital"><option value="">Select hospital</option>${settingOptions('hospital').map(x=>`<option value="${esc(x.label)}" ${existing?.hospital===x.label?'selected':''}>${esc(x.label)}</option>`).join('')}</select></label>
+      <label>Coupon Code<input id="sccoupon" placeholder="Optional coupon code" value="${esc(existing?.coupon_code||'')}"></label>
+      <label>Patient name column <span class="small muted">optional</span><input id="scname" placeholder="name / patient_name" value="${esc(existing?.name_column||'')}"></label>
+      <label>Phone column <span class="small muted">optional</span><input id="scphone" placeholder="phone / mobile" value="${esc(existing?.phone_column||'')}"></label>
+      ${existing?`<label>Active<select id="scactive"><option value="true" ${existing.active!==false?'selected':''}>Active</option><option value="false" ${existing.active===false?'selected':''}>Inactive</option></select></label>`:''}
+    </div>
+
+    <div class="notice" style="margin-top:16px">All rows from this connection will use this Hospital and Coupon Code unless your sheet-sync logic explicitly provides another value.</div>
+    <div class="modal-actions"><button class="btn primary" id="scsave">${existing?'Save Changes':'Connect Sheet'}</button></div>
+  </div>`;
+
+  $('modal').classList.remove('hidden');
+  $('scx').onclick=closeModal;
+  $('scsave').onclick=()=>saveSheetConnection(existing?.id||null);
 }
-async function syncSheetNow(id){if(!GOOGLE_SYNC_URL)return toast('Set googleSyncUrl first');try{let r=await fetch(GOOGLE_SYNC_URL,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'sync',connection_id:id})});let t=await r.text();let j={};try{j=JSON.parse(t)}catch(_){};if(!r.ok||j.ok===false)return toast(j.error||j.message||('Sync failed (HTTP '+r.status+')'));toast(j.message||('Sync complete: '+(j.inserted??0)+' inserted'));setTimeout(async()=>{await loadAll();renderSheets()},800)}catch(e){toast('Sync request failed: '+(e.message||e))}}
+async function saveSheetConnection(existingId=null){
+  let p={
+    name:$('scn').value.trim()||'Google Sheet',
+    sheet_url:$('scurl').value.trim(),
+    tab_name:$('sctab').value.trim()||'Sheet1',
+    source_id:$('scsrc').value,
+    campaign_id:$('sccamp').value,
+    hospital:$('schospital').value||null,
+    coupon_code:$('sccoupon').value.trim()||null,
+    name_column:$('scname').value.trim()||null,
+    phone_column:$('scphone').value.trim()||null
+  };
+
+  if(!p.sheet_url||!p.source_id||!p.campaign_id)
+    return toast('Sheet URL, source and campaign are required');
+
+  if(existingId){
+    p.active=$('scactive')?.value!=='false';
+    const dup=await db.from('sheet_connections')
+      .select('id')
+      .neq('id',existingId)
+      .eq('sheet_url',p.sheet_url)
+      .eq('tab_name',p.tab_name)
+      .eq('source_id',p.source_id)
+      .eq('campaign_id',p.campaign_id)
+      .limit(1);
+    if(dup.error)return toast(dup.error.message);
+    if(dup.data?.length)return toast('Another connection already uses this Sheet tab, source and campaign');
+
+    const r=await db.from('sheet_connections').update(p).eq('id',existingId);
+    if(r.error)return toast(r.error.message);
+    await loadAll();closeModal();renderSheets();toast('Google Sheet connection updated');
+    return;
+  }
+
+  const dup=await db.from('sheet_connections')
+    .select('id')
+    .eq('sheet_url',p.sheet_url)
+    .eq('tab_name',p.tab_name)
+    .eq('source_id',p.source_id)
+    .eq('campaign_id',p.campaign_id)
+    .limit(1);
+  if(dup.error)return toast(dup.error.message);
+  if(dup.data?.length)return toast('This Sheet tab is already connected to this source and campaign');
+
+  p.created_by=me.id;
+  p.active=true;
+
+  let r=await db.from('sheet_connections').insert(p).select().single();
+  if(r.error)return toast(r.error.message);
+  await loadAll();closeModal();renderSheets();toast('Google Sheet connected. New leads will sync automatically');
+}
+function syncSheetNow(id){if(!GOOGLE_SYNC_URL)return toast('Set googleSyncUrl first');try{let r=await fetch(GOOGLE_SYNC_URL,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'sync',connection_id:id})});let t=await r.text();let j={};try{j=JSON.parse(t)}catch(_){};if(!r.ok||j.ok===false)return toast(j.error||j.message||('Sync failed (HTTP '+r.status+')'));toast(j.message||('Sync complete: '+(j.inserted??0)+' inserted'));setTimeout(async()=>{await loadAll();renderSheets()},800)}catch(e){toast('Sync request failed: '+(e.message||e))}}
 function renderExport(){if(me.role!=='admin'){ $('content').innerHTML='<div class="notice">Export is available to Admin only.</div>';return}$('content').innerHTML=`<div class="panel" style="margin-top:0"><div class="form-grid"><label>Campaign<select id="ec"><option value="">All campaigns</option>${uniqueCampaigns().map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select></label><label>Source<select id="es"><option value="">All sources</option>${dbstate.sources.map(s=>`<option value="${s.id}">${esc(s.name)}</option>`).join('')}</select></label><label>Assigned To<select id="ea"><option value="">All callers</option><option value="__unassigned__">Unassigned</option>${dbstate.callers.map(u=>`<option value="${u.id}">${esc(u.full_name)}</option>`).join('')}</select></label><label>Calling Status<select id="est"><option value="">All calling statuses</option>${Object.entries(STATUS).filter(([k])=>k!=='opd_booked').map(([k,v])=>`<option value="${k}">${v}</option>`).join('')}</select></label><label>OPD Status<select id="eopd"><option value="">All OPD statuses</option>${Object.entries(OPD).map(([k,v])=>`<option value="${k}">${v}</option>`).join('')}</select></label><label>Campaign Date From<input id="edfrom" type="date"></label><label>Campaign Date To<input id="edto" type="date"></label></div><div class="modal-actions"><button class="btn secondary" id="ep">Preview Count</button><button class="btn primary" id="ex">Export CSV</button></div><div id="ecount" style="margin-top:14px"></div></div>`;$('ep').onclick=previewExport;$('ex').onclick=doExport}
 function filtered(){let c=$('ec').value,s=$('es').value,a=$('ea').value,st=$('est').value,opd=$('eopd').value,df=$('edfrom').value,dt=$('edto').value;if(df&&dt&&df>dt){$('ecount').innerHTML='<div class="notice" style="background:#fff0f2;color:#b42335;border-color:#f5cbd1">From date cannot be after To date.</div>';return []}return dbstate.leads.filter(l=>{let cd=l.campaign?.campaign_date||'';return (!c||l.campaign_id===c)&&(!s||l.source_id===s)&&(!a||(a==='__unassigned__'?!l.assigned_to:l.assigned_to===a))&&(!st||l.calling_status===st)&&(!opd||l.opd_status===opd)&&(!df||cd>=df)&&(!dt||cd<=dt)})}
 function previewExport(){let x=filtered();if($('edfrom').value&&$('edto').value&&$('edfrom').value>$('edto').value)return;$('ecount').innerHTML=`<div class="notice">${x.length} lead${x.length===1?'':'s'} match the selected filters.</div>`}
