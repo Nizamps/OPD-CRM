@@ -4,8 +4,6 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>OPD Campaign CRM</title>
-<link rel="icon" type="image/png" href="./opd-crm-logo.png">
-<link rel="apple-touch-icon" href="./opd-crm-logo.png">
 <style>
 *{box-sizing:border-box}
 :root{
@@ -37,9 +35,15 @@ button{cursor:pointer}
   box-shadow:var(--shadow);
   backdrop-filter:blur(12px);
 }
-.login-logo{
-  width:104px;height:104px;object-fit:contain;display:block;margin-bottom:16px;
-  filter:drop-shadow(0 8px 14px rgba(18,38,74,.18));
+.login-card:before{
+  content:"";
+  display:block;
+  width:52px;
+  height:52px;
+  border-radius:16px;
+  margin-bottom:20px;
+  background:linear-gradient(135deg,#2bb8aa,#0c8f86);
+  box-shadow:0 10px 22px rgba(33,168,155,.20);
 }
 .brand{
   font-size:22px;
@@ -133,8 +137,6 @@ aside{
   box-shadow:10px 0 34px rgba(18,38,74,.08);
 }
 aside .brand{padding:4px 10px 22px;color:#fff}
-aside .brand-row{display:flex;align-items:center;gap:10px}
-aside .brand-logo{width:54px;height:54px;object-fit:contain;flex:0 0 auto;filter:drop-shadow(0 5px 10px rgba(0,0,0,.20))}
 aside .brand:after{
   content:"Campaign lead management";
   display:block;
@@ -356,7 +358,6 @@ tr:hover td{background:#fcfefe}
 <body>
 <div id="login" class="center screen">
   <div class="login-card">
-    <img class="login-logo" src="./opd-crm-logo.png" alt="OPD CRM logo">
     <div class="brand">OPD <span>Campaign CRM</span></div>
     <h1>Welcome Back</h1>
     <p class="muted">Sign in to your OPD Campaign CRM</p>
@@ -370,7 +371,7 @@ tr:hover td{background:#fcfefe}
 </div>
 <div id="app" class="hidden">
   <aside>
-    <div class="brand"><div class="brand-row"><img class="brand-logo" src="./opd-crm-logo.png" alt=""><span>OPD <span>CRM</span></span></div></div>
+    <div class="brand">OPD <span>CRM</span></div>
     <nav id="nav"></nav>
     <div class="bottom"><div id="userInfo"></div><button id="logout" class="btn ghost">Sign out</button></div>
   </aside>
@@ -404,6 +405,50 @@ const db=createClient(C.url,C.anonKey,{
 const GOOGLE_SYNC_URL=C.googleSyncUrl||'';
 const STATUS={not_called:'Not Called',connected:'Connected',dnp:'DNP',busy:'Busy',switched_off:'Switched Off',wrong_number:'Wrong Number',interested:'Interested',not_interested:'Not Interested',follow_up:'Follow-up',opd_booked:'OPD Booked',call_back:'Call Back Requested'};
 const OPD={not_discussed:'Not Discussed',interested:'Interested',opd_recommended:'OPD Recommended',opd_booked:'OPD Booked',opd_completed:'OPD Completed',no_show:'No Show',cancelled:'Cancelled'};
+
+// Exact campaign names permitted in CRM dropdowns.
+// This is a UI whitelist only; campaign/lead data in Supabase is untouched.
+const ALLOWED_CAMPAIGN_NAMES = [
+  "Alzheimer's Day Camp",
+  "Bone Strength Profile (Speciality)",
+  "Cardio Altius 599",
+  "Cardio EHRC 799",
+  "Consultation",
+  "Dengue",
+  "ENT CAMP (Aug 30)",
+  "Even_hospitals_Dengue_package_2026_version_2",
+  "Freedom Month Campaign (Bones)",
+  "Freedom Month Campaign (Brain)",
+  "Freedom Month Campaign (Heart & Diabeties)",
+  "Freedom Month Campaign (Heart)",
+  "Freedom Month Campaign (Wellness)",
+  "General Surgery (Aug 23)",
+  "General Surgery (Speciality)",
+  "Gynae and Uro (13 Sept)",
+  "Gynae Camp Altius (Aug 30)",
+  "Health pacakages",
+  "Heart & Diabetes (Speciality)",
+  "Heart & Health Assessment",
+  "internal medicine camp",
+  "Internal Medicine Preventive Health Camp",
+  "LIVER HEALTH SCREENING CAMP",
+  "Master health Check Up",
+  "Monsoon Fever Package",
+  "Nephrologist (Aug 23)",
+  "Neuro Altius CAMP",
+  "Neuro Camp 20 Sept",
+  "Neuro Camp July 19",
+  "Ortho Camp (Aug 9th)",
+  "Ortho Camp (sept 6)",
+  "Parents' Day Health",
+  "Speciality CAMP Altius",
+  "Sunday_camp_EHRC_July26",
+  "Urology Health July 8th",
+  "Vascular & Wound Care",
+  "Weekday Specialist OPD Camp"
+];
+const ALLOWED_CAMPAIGN_KEY = new Set(ALLOWED_CAMPAIGN_NAMES.map(x => x.trim().toLowerCase()));
+
 let session=null,me=null,currentPage='dashboard',dbstate={campaigns:[],sources:[],callers:[],leads:[],sheetConnections:[],settings:{options:[],fields:[]},opdBookings:[],campaignHospitals:[]};
 const DEFAULT_HOSPITALS=['EHRC','Altius'];
 const AUTH_STORAGE_KEY='opd-crm-auth';
@@ -655,7 +700,7 @@ function renderDash(){
     <div id="dashBody"></div>
   `;
   const saved=readAppState();
-  if(saved.dashboardCampaign&&dbstate.campaigns.some(c=>c.id===saved.dashboardCampaign))$('dashCampaign').value=saved.dashboardCampaign;
+  if(saved.dashboardCampaign&&uniqueCampaigns().some(c=>c.id===saved.dashboardCampaign))$('dashCampaign').value=saved.dashboardCampaign;
   $('dashCampaign').addEventListener('change',()=>{writeAppState({dashboardCampaign:$('dashCampaign').value});renderDashboardBody();});
   renderDashboardBody();
 }
@@ -663,7 +708,7 @@ function renderDash(){
 function renderDashboardBody(){
   const selectedCampaignId=$('dashCampaign')?.value||'';
   let l=dbstate.leads;
-  if(selectedCampaignId)l=l.filter(x=>x.campaign_id===selectedCampaignId);
+  if(selectedCampaignId)l=l.filter(x=>sameCampaignName(x,selectedCampaignId));
 
   const selectedCampaign=dbstate.campaigns.find(c=>c.id===selectedCampaignId);
   const banner=selectedCampaign
@@ -804,7 +849,7 @@ function getFilteredLeads(){
   return dbstate.leads.filter(l=>{
     let callingDate=String(l.calling_date||'').slice(0,10);
     return (!q||(l.patient_name+' '+l.phone).toLowerCase().includes(q)) &&
-      (!c||l.campaign_id===c) && (!s||l.source_id===s) &&
+      (!c||sameCampaignName(l,c)) && (!s||l.source_id===s) &&
       (!h||String(l.hospital||'').trim().toLowerCase()===h.toLowerCase()) &&
       (!a||(a==='__unassigned__'?!l.assigned_to:l.assigned_to===a)) &&
       (!st||l.calling_status===st) && (!opd||l.opd_status===opd) &&
@@ -844,7 +889,7 @@ async function openLead(id){
     <div class="form-grid">
       <label>Patient Name<input id="pn" value="${esc(l.patient_name)}"></label>
       <label>Phone<input id="ph" value="${esc(l.phone)}"></label>
-      <label>Campaign<select id="c"><option value="">Select campaign</option>${dbstate.campaigns.map(c=>`<option value="${c.id}" ${l.campaign_id===c.id?'selected':''}>${esc(c.name)} · ${date(c.campaign_date)}</option>`).join('')}</select></label>
+      <label>Campaign<select id="c"><option value="">Select campaign</option>${uniqueCampaigns().map(c=>`<option value="${c.id}" ${String(l?.campaign?.name||'').trim().toLowerCase()===String(c.name||'').trim().toLowerCase()?'selected':''}>${esc(c.name)}</option>`).join('')}</select></label>
       <label>Lead Source<select id="src"><option value="">Select source</option>${dbstate.sources.map(s=>`<option value="${s.id}" ${l.source_id===s.id?'selected':''}>${esc(s.name)}</option>`).join('')}</select></label><label>Referral<select id="referralType"><option value="no" ${!l.is_referral?'selected':''}>No</option><option value="yes" ${l.is_referral?'selected':''}>Yes</option></select></label><label>Referred By<input id="referredBy" placeholder="Optional" value="${esc(l.referred_by||'')}"></label>
       <label>Hospital<select id="h">${hospitalOptionsForCampaign(l.campaign_id,l.hospital)}</select></label>
       <label>Coupon Code<input id="cc" placeholder="Optional coupon code" value="${esc(l.coupon_code||'')}"></label>
@@ -896,7 +941,7 @@ function openAddBooking(l){
   $('modal2').innerHTML=`<div class="modal-box" style="max-width:620px">
     <div class="panel-head"><div><h2 style="margin:0">Add OPD Booking</h2><div class="small muted">${esc(l.patient_name)} · ${esc(l.phone)}</div></div><button class="btn secondary" id="bookingClose">Close</button></div>
     <div class="form-grid">
-      <label>Campaign<select id="bCampaign"><option value="">Select campaign</option>${dbstate.campaigns.map(c=>`<option value="${c.id}" ${l.campaign_id===c.id?'selected':''}>${esc(c.name)} · ${date(c.campaign_date)}</option>`).join('')}</select></label>
+      <label>Campaign<select id="bCampaign"><option value="">Select campaign</option>${uniqueCampaigns().map(c=>`<option value="${c.id}" ${String(l?.campaign?.name||'').trim().toLowerCase()===String(c.name||'').trim().toLowerCase()?'selected':''}>${esc(c.name)}</option>`).join('')}</select></label>
       <label>Hospital<select id="bHospital"><option value="">Select hospital</option>${getHospitalOptions().map(h=>`<option value="${esc(h)}" ${(l.hospital||existingCampaign?.location)===h?'selected':''}>${esc(h)}</option>`).join('')}</select></label>
       <label>Booking Date<input id="bDate" type="date" value="${existingCampaign?.campaign_date||new Date().toISOString().slice(0,10)}"></label>
       <label>Doctor Name<input id="bDoctor" placeholder="Optional"></label>
@@ -1097,7 +1142,31 @@ async function saveNewLead(){
 }
 function closeModal(){$('modal').classList.add('hidden')}
 async function saveLead(l){let custom_data={...(l.custom_data||{})};(dbstate.settings.fields||[]).forEach(f=>{const el=$('cf_'+f.field_key);if(el)custom_data[f.field_key]=el.value||null});let patch={patient_name:$('pn').value.trim(),phone:$('ph').value.trim(),campaign_id:$('c').value,source_id:$('src').value,calling_status:$('s').value,opd_status:$('o').value,calling_date:$('calld').value||null,visit:$('v').value||null,follow_up_date:$('fd').value||null,follow_up_time:$('ft').value||null,remarks:$('r').value.trim()||null,hospital:$('h').value||null,coupon_code:$('cc').value.trim()||null,is_referral:$('referralType').value==='yes',referred_by:$('referredBy').value.trim()||null,custom_data,updated_at:new Date().toISOString()};if(!patch.patient_name||!patch.phone||!patch.campaign_id||!patch.source_id)return toast('Name, phone, campaign and source are required');if(me.role==='admin')patch.assigned_to=$('a').value||null;let u=await db.from('leads').update(patch).eq('id',l.id);if(u.error)return toast(u.error.message);await db.from('call_logs').insert({lead_id:l.id,caller_id:me.id,calling_status:patch.calling_status,remarks:patch.remarks});if(patch.calling_status==='follow_up')await db.from('follow_ups').insert({lead_id:l.id,assigned_to:patch.assigned_to||l.assigned_to||me.id,follow_up_date:patch.follow_up_date||new Date().toISOString().slice(0,10),follow_up_time:patch.follow_up_time,notes:patch.remarks});await refreshLeadData({bookings:true});closeModal();go('leads');toast('Lead updated')}
-function uniqueCampaigns(){const seen=new Set(),out=[];for(const c of dbstate.campaigns){const k=`${String(c.name||'').trim().toLowerCase()}|${c.campaign_date||''}`;if(!seen.has(k)){seen.add(k);out.push(c)}}return out}
+function uniqueCampaigns(){
+  const grouped=new Map();
+  for(const c of dbstate.campaigns){
+    const name=String(c.name||'').trim();
+    const key=name.toLowerCase();
+    if(!ALLOWED_CAMPAIGN_KEY.has(key)) continue;
+    const current=grouped.get(key);
+    if(!current){grouped.set(key,c);continue;}
+    const currentSheet=Boolean(dbstate.sheetConnections?.some(sc=>sc.campaign_id===current.id));
+    const candidateSheet=Boolean(dbstate.sheetConnections?.some(sc=>sc.campaign_id===c.id));
+    const currentLeads=dbstate.leads.filter(l=>l.campaign_id===current.id).length;
+    const candidateLeads=dbstate.leads.filter(l=>l.campaign_id===c.id).length;
+    if((candidateSheet&&!currentSheet)||(!currentSheet&&!candidateSheet&&candidateLeads>currentLeads)) grouped.set(key,c);
+  }
+  return ALLOWED_CAMPAIGN_NAMES.map(name=>grouped.get(name.trim().toLowerCase())).filter(Boolean);
+}
+function campaignKeyFromId(id){
+  const c=dbstate.campaigns.find(x=>x.id===id);
+  return String(c?.name||'').trim().toLowerCase();
+}
+function sameCampaignName(lead,selectedId){
+  if(!selectedId) return true;
+  return String(lead?.campaign?.name||'').trim().toLowerCase()===campaignKeyFromId(selectedId);
+}
+
 function getHospitalOptions(){
   const configured=settingOptions('hospital').map(x=>x.label).filter(Boolean);
   return configured.length?[...new Set(configured)]:DEFAULT_HOSPITALS.slice();
@@ -1495,7 +1564,7 @@ function openSheetConnection(id){
       <label>Google Sheet URL<input id="scurl" placeholder="https://docs.google.com/spreadsheets/d/.../edit" value="${esc(existing?.sheet_url||'')}"></label>
       <label>Sheet tab<input id="sctab" value="${esc(existing?.tab_name||'Sheet1')}" placeholder="Sheet1"></label>
       <label>Lead Source<select id="scsrc"><option value="">Select source</option>${dbstate.sources.map(x=>`<option value="${x.id}" ${existing?.source_id===x.id?'selected':''}>${esc(x.name)}</option>`).join('')}</select></label>
-      <label>Campaign<select id="sccamp"><option value="">Select campaign</option>${uniqueCampaigns().map(x=>`<option value="${x.id}" ${existing?.campaign_id===x.id?'selected':''}>${esc(x.name)} · ${date(x.campaign_date)}</option>`).join('')}</select></label>
+      <label>Campaign<select id="sccamp"><option value="">Select campaign</option>${uniqueCampaigns().map(x=>`<option value="${x.id}" ${existing?.campaign_id===x.id?'selected':''}>${esc(x.name)}</option>`).join('')}</select></label>
       <label>Hospital<select id="schospital"><option value="">Select hospital</option>${settingOptions('hospital').map(x=>`<option value="${esc(x.label)}" ${existing?.hospital===x.label?'selected':''}>${esc(x.label)}</option>`).join('')}</select></label>
       <label>Coupon Code<input id="sccoupon" placeholder="Optional coupon code" value="${esc(existing?.coupon_code||'')}"></label>
       <label>Patient name column <span class="small muted">optional</span><input id="scname" placeholder="name / patient_name" value="${esc(existing?.name_column||'')}"></label>
@@ -1565,7 +1634,7 @@ async function saveSheetConnection(existingId=null){
 }
 async function syncSheetNow(id){if(!GOOGLE_SYNC_URL)return toast('Set googleSyncUrl first');try{let r=await fetch(GOOGLE_SYNC_URL,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'sync',connection_id:id})});let t=await r.text();let j={};try{j=JSON.parse(t)}catch(_){};if(!r.ok||j.ok===false)return toast(j.error||j.message||('Sync failed (HTTP '+r.status+')'));toast(j.message||('Sync complete: '+(j.inserted??0)+' inserted'));setTimeout(async()=>{await loadAll();renderSheets()},800)}catch(e){toast('Sync request failed: '+(e.message||e))}}
 function renderExport(){if(me.role!=='admin'){ $('content').innerHTML='<div class="notice">Export is available to Admin only.</div>';return}$('content').innerHTML=`<div class="panel" style="margin-top:0"><div class="form-grid"><label>Campaign<select id="ec"><option value="">All campaigns</option>${uniqueCampaigns().map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select></label><label>Source<select id="es"><option value="">All sources</option>${dbstate.sources.map(s=>`<option value="${s.id}">${esc(s.name)}</option>`).join('')}</select></label><label>Assigned To<select id="ea"><option value="">All callers</option><option value="__unassigned__">Unassigned</option>${dbstate.callers.map(u=>`<option value="${u.id}">${esc(u.full_name)}</option>`).join('')}</select></label><label>Calling Status<select id="est"><option value="">All calling statuses</option>${Object.entries(STATUS).filter(([k])=>k!=='opd_booked').map(([k,v])=>`<option value="${k}">${v}</option>`).join('')}</select></label><label>OPD Status<select id="eopd"><option value="">All OPD statuses</option>${Object.entries(OPD).map(([k,v])=>`<option value="${k}">${v}</option>`).join('')}</select></label><label>Campaign Date From<input id="edfrom" type="date"></label><label>Campaign Date To<input id="edto" type="date"></label></div><div class="modal-actions"><button class="btn secondary" id="ep">Preview Count</button><button class="btn primary" id="ex">Export CSV</button></div><div id="ecount" style="margin-top:14px"></div></div>`;$('ep').onclick=previewExport;$('ex').onclick=doExport}
-function filtered(){let c=$('ec').value,s=$('es').value,a=$('ea').value,st=$('est').value,opd=$('eopd').value,df=$('edfrom').value,dt=$('edto').value;if(df&&dt&&df>dt){$('ecount').innerHTML='<div class="notice" style="background:#fff0f2;color:#b42335;border-color:#f5cbd1">From date cannot be after To date.</div>';return []}return dbstate.leads.filter(l=>{let cd=l.campaign?.campaign_date||'';return (!c||l.campaign_id===c)&&(!s||l.source_id===s)&&(!a||(a==='__unassigned__'?!l.assigned_to:l.assigned_to===a))&&(!st||l.calling_status===st)&&(!opd||l.opd_status===opd)&&(!df||cd>=df)&&(!dt||cd<=dt)})}
+function filtered(){let c=$('ec').value,s=$('es').value,a=$('ea').value,st=$('est').value,opd=$('eopd').value,df=$('edfrom').value,dt=$('edto').value;if(df&&dt&&df>dt){$('ecount').innerHTML='<div class="notice" style="background:#fff0f2;color:#b42335;border-color:#f5cbd1">From date cannot be after To date.</div>';return []}return dbstate.leads.filter(l=>{let cd=l.campaign?.campaign_date||'';return (!c||sameCampaignName(l,c))&&(!s||l.source_id===s)&&(!a||(a==='__unassigned__'?!l.assigned_to:l.assigned_to===a))&&(!st||l.calling_status===st)&&(!opd||l.opd_status===opd)&&(!df||cd>=df)&&(!dt||cd<=dt)})}
 function previewExport(){let x=filtered();if($('edfrom').value&&$('edto').value&&$('edfrom').value>$('edto').value)return;$('ecount').innerHTML=`<div class="notice">${x.length} lead${x.length===1?'':'s'} match the selected filters.</div>`}
 function doExport(){let x=filtered();if($('edfrom').value&&$('edto').value&&$('edfrom').value>$('edto').value)return;if(!x.length)return toast('No leads match');let rows=[['Lead #','Patient Name','Phone','Source','Campaign','Campaign Date','Hospital','Assigned To','Calling Date','Calling Status','Follow-up Date','OPD Status','Visit','Remarks'],...x.map(l=>[l.lead_number,l.patient_name,l.phone,l.source?.name,l.campaign?.name,l.campaign?.campaign_date,l.hospital||'',l.assignee?.full_name||'',l.calling_date||'',STATUS[l.calling_status],l.follow_up_date,OPD[l.opd_status],l.visit||'',l.remarks||''])];let csv=rows.map(r=>r.map(v=>`"${String(v??'').replaceAll('"','""')}"`).join(',')).join('\n');let a=document.createElement('a');a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));a.download='OPD_CRM_Export.csv';a.click();toast(`Exported ${x.length} leads`)}
 function renderUsers(){if(me.role!=='admin')return;$('content').innerHTML=`<div class="panel" style="margin-top:0"><div class="notice">Create users under Supabase Authentication → Users. The schema trigger creates their profile. Promote one profile to Admin using the SQL comment in <b>supabase/schema.sql</b>.</div><div class="table-wrap" style="margin-top:16px"><table><thead><tr><th>Name</th><th>Role</th><th>Status</th></tr></thead><tbody>${[me,...dbstate.callers.filter(x=>x.id!==me.id)].map(u=>`<tr><td>${esc(u.full_name)}</td><td>${esc(u.role)}</td><td>${u.is_active?'Active':'Disabled'}</td></tr>`).join('')}</tbody></table></div></div>`}
