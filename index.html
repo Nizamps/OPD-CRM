@@ -4,6 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>OPD Campaign CRM</title>
+<link rel="icon" type="image/png" href="./opd-crm-logo.png">
+<link rel="apple-touch-icon" href="./opd-crm-logo.png">
 <style>
 *{box-sizing:border-box}
 :root{
@@ -35,16 +37,36 @@ button{cursor:pointer}
   box-shadow:var(--shadow);
   backdrop-filter:blur(12px);
 }
-.login-card:before{
-  content:"";
+.login-card:before{display:none}
+/* CRM logo */
+.crm-logo{
   display:block;
-  width:52px;
-  height:52px;
-  border-radius:16px;
-  margin-bottom:20px;
-  background:linear-gradient(135deg,#2bb8aa,#0c8f86);
-  box-shadow:0 10px 22px rgba(33,168,155,.20);
+  width:58px;
+  height:58px;
+  object-fit:contain;
+  object-position:center;
+  flex:0 0 auto;
 }
+.login-logo{
+  width:112px;
+  height:112px;
+  margin:0 auto 16px;
+  object-fit:contain;
+}
+.sidebar-brand{
+  display:flex;
+  align-items:center;
+  gap:11px;
+  margin-bottom:18px;
+}
+.sidebar-brand .crm-logo{width:54px;height:54px;border-radius:14px;background:rgba(255,255,255,.96);padding:4px}
+.sidebar-brand .brand-copy{min-width:0}
+.sidebar-brand .brand-copy .brand{margin:0}
+.sidebar-brand .brand-copy small{display:block;color:#8292aa;font-size:10px;font-weight:500;letter-spacing:.2px;margin-top:4px}
+@media(max-width:680px){
+  .sidebar-brand .crm-logo{width:46px;height:46px;padding:3px}
+}
+
 .brand{
   font-size:22px;
   font-weight:800;
@@ -137,15 +159,7 @@ aside{
   box-shadow:10px 0 34px rgba(18,38,74,.08);
 }
 aside .brand{padding:4px 10px 22px;color:#fff}
-aside .brand:after{
-  content:"Campaign lead management";
-  display:block;
-  color:#8292aa;
-  font-size:10px;
-  font-weight:500;
-  letter-spacing:.2px;
-  margin-top:5px;
-}
+aside .brand:after{display:none}
 aside .brand span{color:#43c4b6}
 nav{display:grid;gap:5px}
 nav button{
@@ -358,6 +372,7 @@ tr:hover td{background:#fcfefe}
 <body>
 <div id="login" class="center screen">
   <div class="login-card">
+    <img class="crm-logo login-logo" src="./opd-crm-logo.png" alt="OPD CRM logo">
     <div class="brand">OPD <span>Campaign CRM</span></div>
     <h1>Welcome Back</h1>
     <p class="muted">Sign in to your OPD Campaign CRM</p>
@@ -371,7 +386,13 @@ tr:hover td{background:#fcfefe}
 </div>
 <div id="app" class="hidden">
   <aside>
-    <div class="brand">OPD <span>CRM</span></div>
+    <div class="sidebar-brand">
+      <img class="crm-logo" src="./opd-crm-logo.png" alt="OPD CRM logo">
+      <div class="brand-copy">
+        <div class="brand">OPD <span>CRM</span></div>
+        <small>Campaign lead management</small>
+      </div>
+    </div>
     <nav id="nav"></nav>
     <div class="bottom"><div id="userInfo"></div><button id="logout" class="btn ghost">Sign out</button></div>
   </aside>
@@ -1636,7 +1657,7 @@ async function syncSheetNow(id){if(!GOOGLE_SYNC_URL)return toast('Set googleSync
 function renderExport(){if(me.role!=='admin'){ $('content').innerHTML='<div class="notice">Export is available to Admin only.</div>';return}$('content').innerHTML=`<div class="panel" style="margin-top:0"><div class="form-grid"><label>Campaign<select id="ec"><option value="">All campaigns</option>${uniqueCampaigns().map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select></label><label>Source<select id="es"><option value="">All sources</option>${dbstate.sources.map(s=>`<option value="${s.id}">${esc(s.name)}</option>`).join('')}</select></label><label>Assigned To<select id="ea"><option value="">All callers</option><option value="__unassigned__">Unassigned</option>${dbstate.callers.map(u=>`<option value="${u.id}">${esc(u.full_name)}</option>`).join('')}</select></label><label>Calling Status<select id="est"><option value="">All calling statuses</option>${Object.entries(STATUS).filter(([k])=>k!=='opd_booked').map(([k,v])=>`<option value="${k}">${v}</option>`).join('')}</select></label><label>OPD Status<select id="eopd"><option value="">All OPD statuses</option>${Object.entries(OPD).map(([k,v])=>`<option value="${k}">${v}</option>`).join('')}</select></label><label>Campaign Date From<input id="edfrom" type="date"></label><label>Campaign Date To<input id="edto" type="date"></label></div><div class="modal-actions"><button class="btn secondary" id="ep">Preview Count</button><button class="btn primary" id="ex">Export CSV</button></div><div id="ecount" style="margin-top:14px"></div></div>`;$('ep').onclick=previewExport;$('ex').onclick=doExport}
 function filtered(){let c=$('ec').value,s=$('es').value,a=$('ea').value,st=$('est').value,opd=$('eopd').value,df=$('edfrom').value,dt=$('edto').value;if(df&&dt&&df>dt){$('ecount').innerHTML='<div class="notice" style="background:#fff0f2;color:#b42335;border-color:#f5cbd1">From date cannot be after To date.</div>';return []}return dbstate.leads.filter(l=>{let cd=l.campaign?.campaign_date||'';return (!c||sameCampaignName(l,c))&&(!s||l.source_id===s)&&(!a||(a==='__unassigned__'?!l.assigned_to:l.assigned_to===a))&&(!st||l.calling_status===st)&&(!opd||l.opd_status===opd)&&(!df||cd>=df)&&(!dt||cd<=dt)})}
 function previewExport(){let x=filtered();if($('edfrom').value&&$('edto').value&&$('edfrom').value>$('edto').value)return;$('ecount').innerHTML=`<div class="notice">${x.length} lead${x.length===1?'':'s'} match the selected filters.</div>`}
-function doExport(){let x=filtered();if($('edfrom').value&&$('edto').value&&$('edfrom').value>$('edto').value)return;if(!x.length)return toast('No leads match');let rows=[['Lead #','Patient Name','Phone','Source','Campaign','Campaign Date','Hospital','Assigned To','Calling Date','Calling Status','Follow-up Date','OPD Status','Visit','Remarks'],...x.map(l=>[l.lead_number,l.patient_name,l.phone,l.source?.name,l.campaign?.name,l.campaign?.campaign_date,l.hospital||'',l.assignee?.full_name||'',l.calling_date||'',STATUS[l.calling_status],l.follow_up_date,OPD[l.opd_status],l.visit||'',l.remarks||''])];let csv=rows.map(r=>r.map(v=>`"${String(v??'').replaceAll('"','""')}"`).join(',')).join('\n');let a=document.createElement('a');a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));a.download='OPD_CRM_Export.csv';a.click();toast(`Exported ${x.length} leads`)}
+function doExport(){let x=filtered();if($('edfrom').value&&$('edto').value&&$('edfrom').value>$('edto').value)return;if(!x.length)return toast('No leads match');let rows=[['Lead #','Patient Name','Phone','Source','Campaign','Campaign Date','Hospital','Coupon Code','Assigned To','Calling Date','Calling Status','Follow-up Date','OPD Status','Visit','Remarks'],...x.map(l=>[l.lead_number,l.patient_name,l.phone,l.source?.name,l.campaign?.name,l.campaign?.campaign_date,l.hospital||'',l.coupon_code||l.campaign?.coupon_code||'',l.assignee?.full_name||'',l.calling_date||'',STATUS[l.calling_status],l.follow_up_date,OPD[l.opd_status],l.visit||'',l.remarks||''])];let csv=rows.map(r=>r.map(v=>`"${String(v??'').replaceAll('"','""')}"`).join(',')).join('\n');let a=document.createElement('a');a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));a.download='OPD_CRM_Export.csv';a.click();toast(`Exported ${x.length} leads`)}
 function renderUsers(){if(me.role!=='admin')return;$('content').innerHTML=`<div class="panel" style="margin-top:0"><div class="notice">Create users under Supabase Authentication → Users. The schema trigger creates their profile. Promote one profile to Admin using the SQL comment in <b>supabase/schema.sql</b>.</div><div class="table-wrap" style="margin-top:16px"><table><thead><tr><th>Name</th><th>Role</th><th>Status</th></tr></thead><tbody>${[me,...dbstate.callers.filter(x=>x.id!==me.id)].map(u=>`<tr><td>${esc(u.full_name)}</td><td>${esc(u.role)}</td><td>${u.is_active?'Active':'Disabled'}</td></tr>`).join('')}</tbody></table></div></div>`}
 $('loginForm').addEventListener('submit',async e=>{
   e.preventDefault();
