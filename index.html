@@ -4,6 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>OPD Campaign CRM</title>
+<link rel="icon" type="image/png" href="./assets/opd-crm-logo.png">
+<link rel="apple-touch-icon" href="./assets/opd-crm-logo.png">
 <style>
 *{box-sizing:border-box}
 :root{
@@ -35,15 +37,9 @@ button{cursor:pointer}
   box-shadow:var(--shadow);
   backdrop-filter:blur(12px);
 }
-.login-card:before{
-  content:"";
-  display:block;
-  width:52px;
-  height:52px;
-  border-radius:16px;
-  margin-bottom:20px;
-  background:linear-gradient(135deg,#2bb8aa,#0c8f86);
-  box-shadow:0 10px 22px rgba(33,168,155,.20);
+.login-logo{
+  width:74px;height:74px;object-fit:contain;display:block;margin-bottom:16px;
+  filter:drop-shadow(0 8px 14px rgba(18,38,74,.18));
 }
 .brand{
   font-size:22px;
@@ -137,6 +133,8 @@ aside{
   box-shadow:10px 0 34px rgba(18,38,74,.08);
 }
 aside .brand{padding:4px 10px 22px;color:#fff}
+aside .brand-row{display:flex;align-items:center;gap:10px}
+aside .brand-logo{width:38px;height:38px;object-fit:contain;flex:0 0 auto;filter:drop-shadow(0 5px 10px rgba(0,0,0,.20))}
 aside .brand:after{
   content:"Campaign lead management";
   display:block;
@@ -358,6 +356,7 @@ tr:hover td{background:#fcfefe}
 <body>
 <div id="login" class="center screen">
   <div class="login-card">
+    <img class="login-logo" src="./assets/opd-crm-logo.png" alt="OPD CRM logo">
     <div class="brand">OPD <span>Campaign CRM</span></div>
     <h1>Welcome Back</h1>
     <p class="muted">Sign in to your OPD Campaign CRM</p>
@@ -371,7 +370,7 @@ tr:hover td{background:#fcfefe}
 </div>
 <div id="app" class="hidden">
   <aside>
-    <div class="brand">OPD <span>CRM</span></div>
+    <div class="brand"><div class="brand-row"><img class="brand-logo" src="./assets/opd-crm-logo.png" alt=""><span>OPD <span>CRM</span></span></div></div>
     <nav id="nav"></nav>
     <div class="bottom"><div id="userInfo"></div><button id="logout" class="btn ghost">Sign out</button></div>
   </aside>
