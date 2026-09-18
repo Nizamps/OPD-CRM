@@ -83,8 +83,11 @@ textarea{min-height:90px}
   border-radius:11px;
   padding:11px 15px;
   font-weight:700;
-  transition:transform .15s,box-shadow .15s,background .15s;
+  transition:transform .12s,box-shadow .12s,background .12s;
 }
+.btn:disabled{opacity:.62;cursor:not-allowed;transform:none!important}
+[data-loading="true"]{cursor:progress}
+
 .btn:hover{transform:translateY(-1px)}
 .btn.primary{
   background:linear-gradient(135deg,var(--teal),var(--teal-dark));
@@ -395,13 +398,21 @@ const db=createClient(C.url,C.anonKey,{
     persistSession:true,
     autoRefreshToken:true,
     detectSessionInUrl:false,
+    storage:window.localStorage,
     storageKey:'opd-crm-auth'
   }
 });
 const GOOGLE_SYNC_URL=C.googleSyncUrl||'';
 const STATUS={not_called:'Not Called',connected:'Connected',dnp:'DNP',busy:'Busy',switched_off:'Switched Off',wrong_number:'Wrong Number',interested:'Interested',not_interested:'Not Interested',follow_up:'Follow-up',opd_booked:'OPD Booked',call_back:'Call Back Requested'};
 const OPD={not_discussed:'Not Discussed',interested:'Interested',opd_recommended:'OPD Recommended',opd_booked:'OPD Booked',opd_completed:'OPD Completed',no_show:'No Show',cancelled:'Cancelled'};
-let session=null,me=null,dbstate={campaigns:[],sources:[],callers:[],leads:[],sheetConnections:[],settings:{options:[],fields:[]},opdBookings:[]};
+let session=null,me=null,currentPage='dashboard',dbstate={campaigns:[],sources:[],callers:[],leads:[],sheetConnections:[],settings:{options:[],fields:[]},opdBookings:[],campaignHospitals:[]};
+const DEFAULT_HOSPITALS=['EHRC','Altius'];
+const APP_STATE_PREFIX='opd-crm-view-v3:';
+function appStateKey(){return `${APP_STATE_PREFIX}${me?.id||'anonymous'}`;}
+function readAppState(){try{return JSON.parse(localStorage.getItem(appStateKey())||'{}')||{};}catch(_){return {};}}
+function writeAppState(patch={}){try{const prev=readAppState();localStorage.setItem(appStateKey(),JSON.stringify({...prev,...patch,ts:Date.now()}));}catch(_){}}
+function validPageForRole(p){const allowed=me?.role==='admin'?['dashboard','leads','campaigns','import','sheets','export','users','settings']:['dashboard','leads','export'];return allowed.includes(p)?p:'dashboard';}
+
 const $=x=>document.getElementById(x),esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const date=x=>x?new Date(x+'T00:00:00').toLocaleDateString('en-IN',{day:'2-digit',month:'short',year:'numeric'}):'';
 const dt=x=>x?new Date(x).toLocaleString('en-IN',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'}):'';
@@ -423,73 +434,100 @@ async function start(){
       return;
     }
 
-    // Load the profile first. Authentication is considered successful once
-    // the signed-in user's profile is available.
-    await loadMe();
-
-    try{
-      await loadAll();
-    }catch(dataErr){
-      console.error('CRM data load failed:',dataErr);
-      toast('Signed in, but some CRM data could not be loaded. You can refresh.');
-    }
-
+    // A valid Supabase session is enough to keep the user in the app.
+    // Profile/data loading errors must not force a re-login.
+    await loadMeWithRetry();
+    await loadAll();
     showApp();
   }catch(e){
-    console.error('CRM startup/login restore failed:',e);
+    console.error('CRM startup/session restore failed:',e);
+    if(session){
+      // Keep the existing session visible when data loading has a transient failure.
+      $('login').classList.add('hidden');
+      $('app').classList.remove('hidden');
+      if(me){showApp();toast('Some CRM data could not be loaded.');return;}
+    }
     session=null;
     me=null;
     $('app').classList.add('hidden');
     $('login').classList.remove('hidden');
-
-    const msg=e?.message||'Unable to restore your session';
     const er=$('loginError');
-    if(er) er.textContent=msg;
+    if(er) er.textContent=e?.message||'Unable to restore your session';
   }
 }
 db.auth.onAuthStateChange((event,newSession)=>{
   if(event==='SIGNED_OUT'){
-    session=null;me=null;
+    session=null;me=null;currentPage='dashboard';
     $('app').classList.add('hidden');
     $('login').classList.remove('hidden');
-  }else if(event==='SIGNED_IN' || event==='TOKEN_REFRESHED'){
-    session=newSession||session;
+  }else if(newSession){
+    session=newSession;
   }
 });
 setInterval(async()=>{
   if(session && me){
-    try{await loadAll(); if($('leadTable')) updateLeads();}catch(e){console.warn('Background refresh failed:',e)}
+    try{await refreshLeadData({bookings:true});}catch(e){console.warn('Background refresh failed:',e)}
   }
 },60000);
-async function loadMe(){const r=await db.from('profiles').select('*').eq('id',session.user.id).single();if(r.error)throw r.error;me=r.data}
-async function loadAll(){let qs=[db.from('campaigns').select('*').order('campaign_date',{ascending:false}),db.from('lead_sources').select('*').eq('is_active',true).order('name'),db.from('profiles').select('*').eq('is_active',true).order('full_name')];if(me.role==='admin')qs.push(db.from('sheet_connections').select('*, source:lead_sources(name), campaign:campaigns(name,campaign_date)').order('created_at',{ascending:false}));let r=await Promise.all(qs);dbstate.campaigns=r[0].data||[];dbstate.sources=r[1].data||[];dbstate.callers=(r[2].data||[]).filter(x=>x.role==='caller');dbstate.sheetConnections=(me.role==='admin'?(r[3]?.data||[]):[]);
-  const ch=await db.from('campaign_hospitals').select('*').order('hospital');
-  dbstate.campaignHospitals=ch.data||[];
-  if(ch.error)console.warn('Campaign hospital mappings unavailable:',ch.error.message);
-  if(me.role==='admin'){
-    try{
-      const [optRes,fieldRes]=await Promise.all([
-        db.from('crm_dropdown_options').select('*').eq('is_active',true).order('category').order('sort_order').order('label'),
-        db.from('lead_custom_fields').select('*').eq('is_active',true).order('sort_order').order('label')
-      ]);
-      dbstate.settings={options:optRes.data||[],fields:fieldRes.data||[]};
-      if(optRes.error)console.warn('Dropdown settings unavailable:',optRes.error.message);
-      if(fieldRes.error)console.warn('Custom fields unavailable:',fieldRes.error.message);
-    }catch(e){console.warn('Settings load skipped:',e);dbstate.settings={options:[],fields:[]};}
+async function loadMe(){
+  const r=await db.from('profiles').select('*').eq('id',session.user.id).single();
+  if(r.error)throw r.error;
+  me=r.data;
+}
+async function loadMeWithRetry(){
+  let lastError=null;
+  for(let i=0;i<3;i++){
+    try{await loadMe();return;}catch(e){lastError=e;if(i<2)await new Promise(r=>setTimeout(r,350*(i+1)));}
   }
+  throw lastError;
+}
+async function loadAll(){
+  const metadataTasks=[
+    db.from('campaigns').select('id,name,campaign_date,status,location,notes,coupon_code,created_by,created_at,updated_at').order('campaign_date',{ascending:false}),
+    db.from('lead_sources').select('id,name,is_active,created_at').eq('is_active',true).order('name'),
+    db.from('profiles').select('id,full_name,role,is_active,created_at').eq('is_active',true).order('full_name'),
+    db.from('campaign_hospitals').select('id,campaign_id,hospital,is_active').eq('is_active',true).order('hospital'),
+    db.from('crm_dropdown_options').select('id,category,label,sort_order,is_active').eq('is_active',true).order('category').order('sort_order').order('label'),
+    db.from('lead_custom_fields').select('id,label,field_key,field_type,default_value,sort_order,is_active').eq('is_active',true).order('sort_order').order('label')
+  ];
+  if(me.role==='admin')metadataTasks.push(db.from('sheet_connections').select('*, source:lead_sources(name), campaign:campaigns(name,campaign_date)').order('created_at',{ascending:false}));
+
+  const [campRes,srcRes,profRes,chRes,optRes,fieldRes,sheetRes]=await Promise.all([...metadataTasks,loadLeads()]);
+  dbstate.campaigns=campRes.data||[];
+  dbstate.sources=srcRes.data||[];
+  dbstate.callers=(profRes.data||[]).filter(x=>x.role==='caller');
+  dbstate.campaignHospitals=chRes.data||[];
+  dbstate.settings={options:optRes.data||[],fields:fieldRes.data||[]};
+  dbstate.sheetConnections=me.role==='admin'?(sheetRes?.data||[]):[];
+  if(campRes.error)throw campRes.error;
+  if(srcRes.error)throw srcRes.error;
+  if(profRes.error)console.warn('Profiles load:',profRes.error.message);
+  if(chRes.error)console.warn('Campaign hospitals load:',chRes.error.message);
+  if(optRes.error)console.warn('Dropdown options load:',optRes.error.message);
+  if(fieldRes.error)console.warn('Custom fields load:',fieldRes.error.message);
+  if(me.role==='admin'&&sheetRes?.error)console.warn('Sheet connections load:',sheetRes.error.message);
+  await loadBookings();
+  refreshPendingBadge();
+}
+async function loadBookings(){
   try{
-    const br=await db.from('opd_bookings').select('*, campaign:campaigns(name,campaign_date)').order('created_at',{ascending:false});
+    const ids=dbstate.leads.map(l=>l.id);
+    if(me.role!=='admin' && !ids.length){dbstate.opdBookings=[];return;}
+    let q=db.from('opd_bookings').select('id,lead_id,campaign_id,booking_date,doctor_name,department,hospital_name,booking_status,notes,created_by,created_at,campaign:campaigns(name,campaign_date)').order('created_at',{ascending:false});
+    if(me.role!=='admin')q=q.in('lead_id',ids);
+    const br=await q;
     dbstate.opdBookings=br.data||[];
     if(br.error)console.warn('OPD bookings load:',br.error.message);
-  }catch(e){dbstate.opdBookings=[];console.warn('OPD bookings unavailable:',e)}
-  await loadLeads();refreshPendingBadge()}
+  }catch(e){dbstate.opdBookings=[];console.warn('OPD bookings unavailable:',e);}
+}
 async function loadLeads(){
   const pageSize=1000;
+  const select='id,lead_number,patient_name,phone,alternate_phone,source_id,campaign_id,assigned_to,calling_status,opd_status,follow_up_date,follow_up_time,remarks,created_at,updated_at,normalized_phone,source_row_key,calling_date,visit,custom_data,is_referral,referred_by,hospital,coupon_code,campaign:campaigns(id,name,campaign_date),source:lead_sources(id,name),assignee:profiles!leads_assigned_to_fkey(id,full_name)';
   let all=[];
   for(let from=0;;from+=pageSize){
-    let q=db.from('leads').select('*, campaign:campaigns(name,campaign_date), source:lead_sources(name), assignee:profiles!leads_assigned_to_fkey(full_name)');
+    let q=db.from('leads').select(select);
     if(me.role!=='admin')q=q.eq('assigned_to',me.id);
-    let r=await q.order('created_at',{ascending:false}).order('id',{ascending:false}).range(from,from+pageSize-1);
+    const r=await q.order('created_at',{ascending:false}).order('id',{ascending:false}).range(from,from+pageSize-1);
     if(r.error)throw r.error;
     const rows=r.data||[];
     all.push(...rows);
@@ -497,12 +535,22 @@ async function loadLeads(){
   }
   dbstate.leads=all;
 }
+async function refreshLeadData({bookings=false}={}){
+  await loadLeads();
+  if(bookings)await loadBookings();
+  refreshPendingBadge();
+  if(currentPage==='leads'&&$('leadTable'))updateLeads();
+  if(currentPage==='dashboard'&&$('dashBody'))renderDashboardBody();
+}
 function showApp(){
   $('login').classList.add('hidden');
   $('app').classList.remove('hidden');
   $('userInfo').textContent=`${me?.full_name||'User'} · ${me?.role||'user'}`;
   buildNav();
-  go('dashboard');
+  const state=readAppState();
+  currentPage=validPageForRole(state.page||'dashboard');
+  if(state.leads){savedLeadFilterState=state.leads;}
+  go(currentPage,{persist:false});
 }
 function getPendingCallCount(){
   if(!me) return 0;
@@ -528,7 +576,17 @@ function buildNav(){
   document.querySelectorAll('#nav button').forEach(b=>b.onclick=()=>go(b.dataset.page));
   refreshPendingBadge();
 }
-function go(p){document.querySelectorAll('#nav button').forEach(b=>b.classList.toggle('active',b.dataset.page===p));let meta={dashboard:['Dashboard','Campaign and calling performance'],leads:['Leads','Work your calling queue'],campaigns:['Campaigns','Create and manage weekend campaigns'],import:['Import','Bring leads into a campaign'],sheets:['Google Sheets','Connect live lead sources'],export:['Export','Download filtered lead data'],users:['Users','Manage CRM access'],settings:['Settings','Manage dropdowns and custom lead fields']}[p];$('title').textContent=meta[0];$('subtitle').textContent=meta[1];$('actions').innerHTML='';({dashboard:renderDash,leads:renderLeads,campaigns:renderCampaigns,import:renderImport,sheets:renderSheets,export:renderExport,users:renderUsers,settings:renderSettings}[p]||renderDash)()}
+function go(p,{persist=true}={}){
+  p=validPageForRole(p);
+  currentPage=p;
+  document.querySelectorAll('#nav button').forEach(b=>b.classList.toggle('active',b.dataset.page===p));
+  const meta={dashboard:['Dashboard','Campaign and calling performance'],leads:['Leads','Work your calling queue'],campaigns:['Campaigns','Create and manage weekend campaigns'],import:['Import','Bring leads into a campaign'],sheets:['Google Sheets','Connect live lead sources'],export:['Export','Download filtered lead data'],users:['Users','Manage CRM access'],settings:['Settings','Manage dropdowns and custom lead fields']}[p];
+  $('title').textContent=meta[0];
+  $('subtitle').textContent=meta[1];
+  $('actions').innerHTML='';
+  ({dashboard:renderDash,leads:renderLeads,campaigns:renderCampaigns,import:renderImport,sheets:renderSheets,export:renderExport,users:renderUsers,settings:renderSettings}[p]||renderDash)();
+  if(persist)writeAppState({page:p});
+}
 function renderDash(){
   const campaignOptions=uniqueCampaigns ? uniqueCampaigns() : dbstate.campaigns;
   $('content').innerHTML=`
@@ -543,7 +601,9 @@ function renderDash(){
     </div>
     <div id="dashBody"></div>
   `;
-  $('dashCampaign').addEventListener('change',renderDashboardBody);
+  const saved=readAppState();
+  if(saved.dashboardCampaign&&dbstate.campaigns.some(c=>c.id===saved.dashboardCampaign))$('dashCampaign').value=saved.dashboardCampaign;
+  $('dashCampaign').addEventListener('change',()=>{writeAppState({dashboardCampaign:$('dashCampaign').value});renderDashboardBody();});
   renderDashboardBody();
 }
 
@@ -638,13 +698,23 @@ function renderLeads(){
     <label style="display:flex;align-items:center;gap:7px;width:auto;min-width:0">Rows <select id="pageSize"><option value="25">25</option><option value="50">50</option><option value="100" selected>100</option><option value="200">200</option></select></label>
   </div><div id="leadCount" class="small muted" style="margin-bottom:12px"></div><div id="leadTable"></div><div id="pagination"></div></div>`;
 
-  ['q','fc','fs','fh','fa','fst','fopd','fvisit','fcdfrom','fcdto'].forEach(id=>$(id).addEventListener('input',()=>{leadPage=1;clearLeadSelection();updateLeads()}));
-  $('pageSize').addEventListener('change',()=>{leadPage=1;clearLeadSelection();updateLeads()});
+  const persistFilters=()=>{
+    if(!$('q'))return;
+    const s={q:$('q').value,fc:$('fc').value,fs:$('fs').value,fh:$('fh').value,fa:$('fa').value,fst:$('fst').value,fopd:$('fopd').value,fvisit:$('fvisit').value,fcdfrom:$('fcdfrom').value,fcdto:$('fcdto').value,pageSize:$('pageSize')?.value||'100',page:leadPage};
+    writeAppState({page:'leads',leads:s});
+  };
+  let filterTimer=null;
+  const onFilter=()=>{clearTimeout(filterTimer);filterTimer=setTimeout(()=>{leadPage=1;clearLeadSelection();persistFilters();updateLeads();},90);};
+  ['q','fc','fs','fh','fa','fst','fopd','fvisit','fcdfrom','fcdto'].forEach(id=>$(id).addEventListener('input',onFilter));
+  $('pageSize').addEventListener('change',()=>{leadPage=1;clearLeadSelection();persistFilters();updateLeads()});
   $('newLead').onclick=()=>openNewLead();
   $('selectAllPage').addEventListener('change',toggleSelectAllPage);
   if(me.role==='admin')$('bulkAssign').onclick=bulkAssignSelected;
+  const persistedLeadState=readAppState().leads;
+  if(persistedLeadState&&persistedLeadState.page!==undefined)savedLeadFilterState=persistedLeadState;
   restoreLeadFilterState();
   updateLeads();
+  persistFilters();
 }
 let leadPage=1;
 let leadSelected=new Set();
@@ -693,7 +763,7 @@ function updateSelectedCount(){if($('selectedCount'))$('selectedCount').textCont
 function toggleLeadSelection(id,checked){if(checked)leadSelected.add(id);else leadSelected.delete(id);updateSelectedCount();syncSelectAllPage()}
 function toggleSelectAllPage(){let x=getFilteredLeads(),ps=Number($('pageSize').value||100),rows=x.slice((leadPage-1)*ps,(leadPage-1)*ps+ps),checked=$('selectAllPage').checked;rows.forEach(l=>checked?leadSelected.add(l.id):leadSelected.delete(l.id));document.querySelectorAll('.lead-row-check').forEach(c=>c.checked=checked);updateSelectedCount()}
 function syncSelectAllPage(){let x=getFilteredLeads(),ps=Number($('pageSize').value||100),rows=x.slice((leadPage-1)*ps,(leadPage-1)*ps+ps),all=rows.length>0&&rows.every(l=>leadSelected.has(l.id)),some=rows.some(l=>leadSelected.has(l.id));if($('selectAllPage')){$('selectAllPage').checked=all;$('selectAllPage').indeterminate=!all&&some}}
-function renderPagination(total,pageSize){let pages=Math.max(1,Math.ceil(total/pageSize));if(leadPage>pages)leadPage=pages;let start=total?((leadPage-1)*pageSize)+1:0,end=Math.min(leadPage*pageSize,total),buttons='';for(let p=Math.max(1,leadPage-2);p<=Math.min(pages,leadPage+2);p++)buttons+=`<button class="btn ${p===leadPage?'primary':'secondary'}" data-page="${p}">${p}</button>`;$('pagination').innerHTML=`<div class="pagination"><span class="pagination-info">Showing ${start}-${end} of ${total}</span><div class="pages"><button class="btn secondary" data-page="${leadPage-1}" ${leadPage<=1?'disabled':''}>‹</button>${buttons}<button class="btn secondary" data-page="${leadPage+1}" ${leadPage>=pages?'disabled':''}>›</button></div></div>`;document.querySelectorAll('#pagination [data-page]').forEach(b=>b.onclick=()=>{let p=Number(b.dataset.page);if(p>=1&&p<=pages){leadPage=p;updateLeads()}})}
+function renderPagination(total,pageSize){let pages=Math.max(1,Math.ceil(total/pageSize));if(leadPage>pages)leadPage=pages;let start=total?((leadPage-1)*pageSize)+1:0,end=Math.min(leadPage*pageSize,total),buttons='';for(let p=Math.max(1,leadPage-2);p<=Math.min(pages,leadPage+2);p++)buttons+=`<button class="btn ${p===leadPage?'primary':'secondary'}" data-page="${p}">${p}</button>`;$('pagination').innerHTML=`<div class="pagination"><span class="pagination-info">Showing ${start}-${end} of ${total}</span><div class="pages"><button class="btn secondary" data-page="${leadPage-1}" ${leadPage<=1?'disabled':''}>‹</button>${buttons}<button class="btn secondary" data-page="${leadPage+1}" ${leadPage>=pages?'disabled':''}>›</button></div></div>`;document.querySelectorAll('#pagination [data-page]').forEach(b=>b.onclick=()=>{let p=Number(b.dataset.page);if(p>=1&&p<=pages){leadPage=p;writeAppState({page:'leads',leads:{...readAppState().leads,page:leadPage}});updateLeads()}})}
 function updateLeads(){
   let x=getFilteredLeads(),ps=Number($('pageSize')?.value||100),pages=Math.max(1,Math.ceil(x.length/ps));if(leadPage>pages)leadPage=pages;let rows=x.slice((leadPage-1)*ps,(leadPage-1)*ps+ps);
   $('leadCount').textContent=`${x.length} lead${x.length===1?'':'s'} found`;
@@ -703,7 +773,7 @@ function updateLeads(){
   let hs=$('headerSelect');if(hs)hs.onchange=()=>{let checked=hs.checked,x=getFilteredLeads(),ps=Number($('pageSize').value||100),rows=x.slice((leadPage-1)*ps,(leadPage-1)*ps+ps);rows.forEach(l=>checked?leadSelected.add(l.id):leadSelected.delete(l.id));document.querySelectorAll('.lead-row-check').forEach(c=>c.checked=checked);if($('selectAllPage'))$('selectAllPage').checked=checked;updateSelectedCount()};
   renderPagination(x.length,ps);syncSelectAllPage();updateSelectedCount();refreshPendingBadge();
 }
-async function bulkAssignSelected(){if(me.role!=='admin')return;if(!leadSelected.size)return toast('Select at least one lead');const target=$('bulkAssignee').value;if(!target)return toast('Choose a caller or Unassign selected');const ids=Array.from(leadSelected),assigned_to=target==='__unassigned__'?null:target,callerName=target==='__unassigned__'?'Unassigned':(dbstate.callers.find(u=>u.id===target)?.full_name||'caller');if(!confirm(`Assign ${ids.length} lead${ids.length===1?'':'s'} to ${callerName}?`))return;const u=await db.from('leads').update({assigned_to,updated_at:new Date().toISOString()}).in('id',ids);if(u.error)return toast(u.error.message);if(assigned_to){const ar=await db.from('lead_assignments').insert(ids.map(id=>({lead_id:id,assigned_to,assigned_by:me.id})));if(ar.error)console.warn('Assignment history insert failed:',ar.error)}clearLeadSelection();$('bulkAssignee').value='';await loadAll();updateLeads();toast(`${ids.length} lead${ids.length===1?'':'s'} assigned`)}
+async function bulkAssignSelected(){if(me.role!=='admin')return;if(!leadSelected.size)return toast('Select at least one lead');const target=$('bulkAssignee').value;if(!target)return toast('Choose a caller or Unassign selected');const ids=Array.from(leadSelected),assigned_to=target==='__unassigned__'?null:target,callerName=target==='__unassigned__'?'Unassigned':(dbstate.callers.find(u=>u.id===target)?.full_name||'caller');if(!confirm(`Assign ${ids.length} lead${ids.length===1?'':'s'} to ${callerName}?`))return;const u=await db.from('leads').update({assigned_to,updated_at:new Date().toISOString()}).in('id',ids);if(u.error)return toast(u.error.message);if(assigned_to){const ar=await db.from('lead_assignments').insert(ids.map(id=>({lead_id:id,assigned_to,assigned_by:me.id})));if(ar.error)console.warn('Assignment history insert failed:',ar.error)}clearLeadSelection();$('bulkAssignee').value='';await refreshLeadData();toast(`${ids.length} lead${ids.length===1?'':'s'} assigned`)}
 async function openLead(id){
   captureLeadFilterState();
   let l=dbstate.leads.find(x=>x.id===id);
@@ -774,7 +844,7 @@ function openAddBooking(l){
     <div class="panel-head"><div><h2 style="margin:0">Add OPD Booking</h2><div class="small muted">${esc(l.patient_name)} · ${esc(l.phone)}</div></div><button class="btn secondary" id="bookingClose">Close</button></div>
     <div class="form-grid">
       <label>Campaign<select id="bCampaign"><option value="">Select campaign</option>${dbstate.campaigns.map(c=>`<option value="${c.id}" ${l.campaign_id===c.id?'selected':''}>${esc(c.name)} · ${date(c.campaign_date)}</option>`).join('')}</select></label>
-      <label>Hospital<select id="bHospital"><option value="">Select hospital</option>${settingOptions('hospital').length?settingOptions('hospital').map(x=>`<option value="${esc(x.label)}" ${(l.hospital||existingCampaign?.location)===x.label?'selected':''}>${esc(x.label)}</option>`).join(''):'<option value="EHRC">EHRC</option><option value="Altius">Altius</option>'}</select></label>
+      <label>Hospital<select id="bHospital"><option value="">Select hospital</option>${getHospitalOptions().map(h=>`<option value="${esc(h)}" ${(l.hospital||existingCampaign?.location)===h?'selected':''}>${esc(h)}</option>`).join('')}</select></label>
       <label>Booking Date<input id="bDate" type="date" value="${existingCampaign?.campaign_date||new Date().toISOString().slice(0,10)}"></label>
       <label>Doctor Name<input id="bDoctor" placeholder="Optional"></label>
       <label>Department<input id="bDept" placeholder="Optional"></label>
@@ -815,14 +885,14 @@ function openAddBooking(l){
     // Keep lead status in sync.
     await db.from('leads').update({opd_status:'opd_booked',updated_at:new Date().toISOString()}).eq('id',l.id);
     $('modal2').classList.add('hidden');
-    await loadAll();
+    await refreshLeadData({bookings:true});
     closeModal();
     go('leads');
     toast('OPD booking added');
   };
 }
 function openNewLead(){
-  $('modal').innerHTML=`<div class="modal-box"><div class="panel-head"><div><h2 style="margin:0">Add New Lead</h2><div class="small muted">Create a lead directly in the CRM.</div></div><button class="btn secondary" id="newClose">Close</button></div><div class="form-grid"><label>Patient Name<input id="npn" placeholder="Patient name"></label><label>Phone<input id="nph" placeholder="Phone number"></label><label>Campaign<select id="nc"><option value="">Select campaign</option>${uniqueCampaigns().map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select></label><label>Lead Source<select id="ns"><option value="">Select source</option>${dbstate.sources.map(s=>`<option value="${s.id}">${esc(s.name)}</option>`).join('')}</select></label><label>Referral<select id="nReferral"><option value="no" selected>No</option><option value="yes">Yes</option></select></label><label>Referred By<input id="nReferredBy" placeholder="Optional"></label><label>Hospital<select id="nh"><option value="">Select hospital</option>${settingOptions('hospital').length?settingOptions('hospital').map(x=>`<option value="${esc(x.label)}">${esc(x.label)}</option>`).join(''):'<option value="EHRC">EHRC</option><option value="Altius">Altius</option>'}</select></label><label>Coupon Code<input id="ncc" placeholder="Optional coupon code"></label>${me.role==='admin'?`<label>Assigned To<select id="na"><option value="">Unassigned</option>${dbstate.callers.map(u=>`<option value="${u.id}">${esc(u.full_name)}</option>`).join('')}</select></label>`:''}<label>Calling Status<select id="nst">${statusOptionHtml('calling_status',Object.fromEntries(Object.entries(STATUS).filter(([k])=>k!=='opd_booked')),'not_called')}</select></label><label>Calling Date<input id="ncalld" type="date"></label><label>OPD Status<select id="no">${statusOptionHtml('opd_status',OPD,'not_discussed')}</select></label><label>Visit<select id="nv"><option value="">Select visit</option>${(settingOptions('visit').length?settingOptions('visit').map(x=>`<option value="${esc(x.label)}">${esc(x.label)}</option>`).join(''):'<option value="Completed">Completed</option><option value="No Show">No Show</option>')}</select></label><label>Follow-up Date<input id="nfd" type="date"></label><label>Follow-up Time<input id="nft" type="time"></label><label>Remarks<input id="nr" placeholder="Optional remarks"></label></div><div class="modal-actions"><button class="btn primary" id="createLead">Add Lead</button></div></div>`;
+  $('modal').innerHTML=`<div class="modal-box"><div class="panel-head"><div><h2 style="margin:0">Add New Lead</h2><div class="small muted">Create a lead directly in the CRM.</div></div><button class="btn secondary" id="newClose">Close</button></div><div class="form-grid"><label>Patient Name<input id="npn" placeholder="Patient name"></label><label>Phone<input id="nph" placeholder="Phone number"></label><label>Campaign<select id="nc"><option value="">Select campaign</option>${uniqueCampaigns().map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select></label><label>Lead Source<select id="ns"><option value="">Select source</option>${dbstate.sources.map(s=>`<option value="${s.id}">${esc(s.name)}</option>`).join('')}</select></label><label>Referral<select id="nReferral"><option value="no" selected>No</option><option value="yes">Yes</option></select></label><label>Referred By<input id="nReferredBy" placeholder="Optional"></label><label>Hospital<select id="nh"><option value="">Select hospital</option>${getHospitalOptions().map(h=>`<option value="${esc(h)}">${esc(h)}</option>`).join('')}</select></label><label>Coupon Code<input id="ncc" placeholder="Optional coupon code"></label>${me.role==='admin'?`<label>Assigned To<select id="na"><option value="">Unassigned</option>${dbstate.callers.map(u=>`<option value="${u.id}">${esc(u.full_name)}</option>`).join('')}</select></label>`:''}<label>Calling Status<select id="nst">${statusOptionHtml('calling_status',Object.fromEntries(Object.entries(STATUS).filter(([k])=>k!=='opd_booked')),'not_called')}</select></label><label>Calling Date<input id="ncalld" type="date"></label><label>OPD Status<select id="no">${statusOptionHtml('opd_status',OPD,'not_discussed')}</select></label><label>Visit<select id="nv"><option value="">Select visit</option>${(settingOptions('visit').length?settingOptions('visit').map(x=>`<option value="${esc(x.label)}">${esc(x.label)}</option>`).join(''):'<option value="Completed">Completed</option><option value="No Show">No Show</option>')}</select></label><label>Follow-up Date<input id="nfd" type="date"></label><label>Follow-up Time<input id="nft" type="time"></label><label>Remarks<input id="nr" placeholder="Optional remarks"></label></div><div class="modal-actions"><button class="btn primary" id="createLead">Add Lead</button></div></div>`;
   $('modal').classList.remove('hidden');
   $('newClose').onclick=closeModal;
   $('createLead').onclick=saveNewLead;
@@ -830,7 +900,7 @@ function openNewLead(){
     const cid=$('nc').value;
     const current=$('nh').value;
     const mapped=getCampaignHospitals(cid);
-    const names=mapped.length?mapped:settingOptions('hospital').map(x=>x.label);
+    const names=mapped.length?mapped:getHospitalOptions();
     $('nh').innerHTML='<option value="">Select hospital</option>'+names.map(h=>`<option value="${esc(h)}">${esc(h)}</option>`).join('');
     if(names.length===1)$('nh').value=names[0];
     else if(names.includes(current))$('nh').value=current;
@@ -902,73 +972,28 @@ async function saveNewLead(){
     return;
   }
 
-  // Use the normal RPC first. Some deployed versions still enforce the old
-  // phone+campaign duplicate rule, so fall back to a direct insert when the
-  // RPC reports a duplicate. The DB no longer has the phone+campaign unique
-  // constraint, allowing shared-family phone numbers.
-  let r=await db.rpc('add_lead_manual',{
-    p_patient_name:name,
-    p_phone:phone,
-    p_source_id:source_id,
-    p_campaign_id:campaign_id,
-    p_assigned_to:assigned,
-    p_calling_status:calling_status,
-    p_opd_status:opd_status,
-    p_follow_up_date:follow_up_date,
-    p_follow_up_time:follow_up_time,
-    p_remarks:remarks,
-    p_hospital:hospital,
-    p_coupon_code:coupon_code
-  });
-
   let leadId=null;
 
-  if(r.error){
-    // Try direct insert only for the known duplicate behavior.
-    if(!/exist|duplicate|already|unique/i.test(r.error.message||'')){
-      return toast(r.error.message);
-    }
-  }else if(r.data?.duplicate){
-    // Old RPC says duplicate; since names differ, continue with direct insert.
-  }else if(r.data?.lead_id){
-    leadId=r.data.lead_id;
-  }else if(Array.isArray(r.data)&&r.data[0]?.lead_id){
-    leadId=r.data[0].lead_id;
+  // Direct insert keeps manual caller entry independent of any older RPC version.
+  // The RLS policy limits callers to creating leads assigned to themselves.
+  let custom_data={};
+  (dbstate.settings.fields||[]).forEach(f=>{
+    const el=$('ncf_'+f.field_key);
+    if(el)custom_data[f.field_key]=el.value||null;
+  });
+
+  const ins=await db.from('leads').insert({
+    patient_name:name, phone, source_id, campaign_id, assigned_to:assigned,
+    calling_status, opd_status, follow_up_date, follow_up_time, remarks, hospital,
+    coupon_code, is_referral, referred_by, custom_data
+  }).select('id').single();
+
+  if(ins.error){
+    if(/duplicate|unique/i.test(ins.error.message||''))
+      return toast('This phone number is already used for this campaign.');
+    return toast(ins.error.message);
   }
-
-  if(!leadId){
-    let custom_data={};
-    (dbstate.settings.fields||[]).forEach(f=>{
-      const el=$('ncf_'+f.field_key);
-      if(el)custom_data[f.field_key]=el.value||null;
-    });
-
-    const ins=await db.from('leads').insert({
-      patient_name:name,
-      phone:phone,
-      source_id:source_id,
-      campaign_id:campaign_id,
-      assigned_to:assigned,
-      calling_status,
-      opd_status,
-      follow_up_date,
-      follow_up_time,
-      remarks,
-      hospital,
-      coupon_code,
-      is_referral,
-      referred_by,
-      custom_data
-    }).select('id').single();
-
-    if(ins.error){
-      if(/duplicate|unique|exist/i.test(ins.error.message||'')){
-        return toast('This number is already used for the same patient in this campaign.');
-      }
-      return toast(ins.error.message);
-    }
-    leadId=ins.data?.id||null;
-  }
+  leadId=ins.data?.id||null;
 
   if(!leadId)return toast('Lead could not be created');
 
@@ -1018,8 +1043,12 @@ async function saveNewLead(){
     : 'New lead added');
 }
 function closeModal(){$('modal').classList.add('hidden')}
-async function saveLead(l){let custom_data={...(l.custom_data||{})};(dbstate.settings.fields||[]).forEach(f=>{const el=$('cf_'+f.field_key);if(el)custom_data[f.field_key]=el.value||null});let patch={patient_name:$('pn').value.trim(),phone:$('ph').value.trim(),campaign_id:$('c').value,source_id:$('src').value,calling_status:$('s').value,opd_status:$('o').value,calling_date:$('calld').value||null,visit:$('v').value||null,follow_up_date:$('fd').value||null,follow_up_time:$('ft').value||null,remarks:$('r').value.trim()||null,hospital:$('h').value||null,coupon_code:$('cc').value.trim()||null,is_referral:$('referralType').value==='yes',referred_by:$('referredBy').value.trim()||null,custom_data,updated_at:new Date().toISOString()};if(!patch.patient_name||!patch.phone||!patch.campaign_id||!patch.source_id)return toast('Name, phone, campaign and source are required');if(me.role==='admin')patch.assigned_to=$('a').value||null;let u=await db.from('leads').update(patch).eq('id',l.id);if(u.error)return toast(u.error.message);await db.from('call_logs').insert({lead_id:l.id,caller_id:me.id,calling_status:patch.calling_status,remarks:patch.remarks});if(patch.calling_status==='follow_up')await db.from('follow_ups').insert({lead_id:l.id,assigned_to:patch.assigned_to||l.assigned_to||me.id,follow_up_date:patch.follow_up_date||new Date().toISOString().slice(0,10),follow_up_time:patch.follow_up_time,notes:patch.remarks});await loadAll();closeModal();go('leads');toast('Lead updated')}
+async function saveLead(l){let custom_data={...(l.custom_data||{})};(dbstate.settings.fields||[]).forEach(f=>{const el=$('cf_'+f.field_key);if(el)custom_data[f.field_key]=el.value||null});let patch={patient_name:$('pn').value.trim(),phone:$('ph').value.trim(),campaign_id:$('c').value,source_id:$('src').value,calling_status:$('s').value,opd_status:$('o').value,calling_date:$('calld').value||null,visit:$('v').value||null,follow_up_date:$('fd').value||null,follow_up_time:$('ft').value||null,remarks:$('r').value.trim()||null,hospital:$('h').value||null,coupon_code:$('cc').value.trim()||null,is_referral:$('referralType').value==='yes',referred_by:$('referredBy').value.trim()||null,custom_data,updated_at:new Date().toISOString()};if(!patch.patient_name||!patch.phone||!patch.campaign_id||!patch.source_id)return toast('Name, phone, campaign and source are required');if(me.role==='admin')patch.assigned_to=$('a').value||null;let u=await db.from('leads').update(patch).eq('id',l.id);if(u.error)return toast(u.error.message);await db.from('call_logs').insert({lead_id:l.id,caller_id:me.id,calling_status:patch.calling_status,remarks:patch.remarks});if(patch.calling_status==='follow_up')await db.from('follow_ups').insert({lead_id:l.id,assigned_to:patch.assigned_to||l.assigned_to||me.id,follow_up_date:patch.follow_up_date||new Date().toISOString().slice(0,10),follow_up_time:patch.follow_up_time,notes:patch.remarks});await refreshLeadData({bookings:true});closeModal();go('leads');toast('Lead updated')}
 function uniqueCampaigns(){const seen=new Set(),out=[];for(const c of dbstate.campaigns){const k=`${String(c.name||'').trim().toLowerCase()}|${c.campaign_date||''}`;if(!seen.has(k)){seen.add(k);out.push(c)}}return out}
+function getHospitalOptions(){
+  const configured=settingOptions('hospital').map(x=>x.label).filter(Boolean);
+  return configured.length?[...new Set(configured)]:DEFAULT_HOSPITALS.slice();
+}
 function getCampaignHospitals(campaignId){
   return (dbstate.campaignHospitals||[])
     .filter(x=>x.campaign_id===campaignId && x.is_active!==false)
@@ -1028,8 +1057,8 @@ function getCampaignHospitals(campaignId){
 }
 function hospitalOptionsForCampaign(campaignId,selected){
   const mapped=getCampaignHospitals(campaignId);
-  const names=mapped.length?mapped:settingOptions('hospital').map(x=>x.label);
-  return `<option value="">${names.length===1?'Select hospital':'Select hospital'}</option>`+
+  const names=mapped.length?mapped:getHospitalOptions();
+  return `<option value="">Select hospital</option>`+
     names.map(h=>`<option value="${esc(h)}" ${selected===h?'selected':''}>${esc(h)}</option>`).join('');
 }
 function renderCampaigns(){
@@ -1117,19 +1146,10 @@ function openCampaign(id){
     };
 
     if(!p.name||!p.campaign_date)return toast('Campaign name and date are required');
-    // Duplicate rule: only the SAME campaign name + SAME date is blocked.
-    // Different campaign names on the same date are allowed.
-    {
-      const sameDate=await db.from('campaigns').select('id,name,campaign_date').eq('campaign_date',p.campaign_date);
-      if(sameDate.error)return toast(sameDate.error.message);
-      const wantedName=String(p.name||'').trim().toLowerCase();
-      const dup=(sameDate.data||[]).find(c =>
-        c.id!==existing?.id &&
-        String(c.name||'').trim().toLowerCase()===wantedName
-      );
-      if(dup){
-        return toast('This campaign name already exists for this date. Use the existing campaign or choose a different campaign name.');
-      }
+    if(!existing){
+      const dup=await db.from('campaigns').select('id,name,campaign_date').ilike('name',p.name).eq('campaign_date',p.campaign_date);
+      if(dup.error)return toast(dup.error.message);
+      if((dup.data||[]).length)return toast('This campaign already exists for this date. Use the existing campaign.');
     }
 
     let r=existing
@@ -1370,210 +1390,9 @@ async function renderSettings(){
   });
 }
 
-function renderImport(){
-  if(me.role!=='admin')return;
-  $('actions').innerHTML='<button class="btn primary" id="topImportCsv">📥 Import CSV</button>';
-  $('content').innerHTML=`
-    <div class="panel" style="margin-top:0">
-      <div class="panel-head">
-        <div>
-          <h2 style="margin:0">Import Leads via CSV</h2>
-          <div class="small muted" style="margin-top:4px">Upload a CSV file, choose the campaign and lead source, then import the leads directly into the CRM.</div>
-        </div>
-        <span class="pill">Admin only</span>
-      </div>
-
-      <div class="notice" style="margin-top:14px">
-        <b>Required CSV columns:</b> Patient Name and Phone. Common names such as <code>name</code>, <code>patient_name</code>, <code>phone</code>, <code>mobile</code> and <code>phone_number</code> are supported.
-      </div>
-
-      <div class="form-grid" style="margin-top:16px">
-        <label>CSV File
-          <input id="if" type="file" accept=".csv,text/csv">
-        </label>
-        <label>Campaign
-          <select id="ic"><option value="">Select campaign</option>${uniqueCampaigns().map(c=>`<option value="${c.id}">${esc(c.name)} · ${esc(c.campaign_date||'')}</option>`).join('')}</select>
-        </label>
-        <label>Lead Source
-          <select id="is"><option value="">Select lead source</option>${dbstate.sources.map(x=>`<option value="${x.id}">${esc(x.name)}</option>`).join('')}</select>
-        </label>
-        <label>Assignment
-          <select id="ia"><option value="round">Round-robin assign to callers</option><option value="none">Leave unassigned</option></select>
-        </label>
-        <label>Default Hospital <span class="small muted">(optional)</span>
-          <input id="iHospital" placeholder="e.g. Altius Hospitals">
-        </label>
-        <label>Default Coupon Code <span class="small muted">(optional)</span>
-          <input id="iCoupon" placeholder="e.g. ORTHO20">
-        </label>
-      </div>
-
-      <div id="importFileInfo" class="small muted" style="margin-top:12px">No CSV selected.</div>
-      <div id="importPreview" style="margin-top:14px"></div>
-
-      <div class="modal-actions" style="margin-top:18px">
-        <button class="btn secondary" id="previewCsv">Preview CSV</button>
-        <button class="btn primary" id="runCsvImport">📥 Import Leads</button>
-        <button class="btn secondary" id="downloadCsvTemplate">Download CSV Template</button>
-      </div>
-    </div>
-
-    <div class="panel">
-      <div class="panel-head"><div><b>What gets imported</b><div class="small muted" style="margin-top:4px">Optional columns are imported when present.</div></div></div>
-      <div class="small" style="line-height:1.8">
-        <b>Supported fields:</b> Patient Name, Phone, Alternate Phone, Hospital, Coupon Code, Calling Status, OPD Status, Calling Date, Visit, Remarks, Referral, Referred By.
-      </div>
-      <div class="notice" style="margin-top:12px">The importer prevents the same patient + phone from being imported twice into the same campaign, while still allowing the same phone number for different patient names.</div>
-    </div>`;
-
-  $('topImportCsv').onclick=()=>document.getElementById('if').click();
-  $('if').onchange=()=>showCsvPreview(false);
-  $('previewCsv').onclick=()=>showCsvPreview(true);
-  $('runCsvImport').onclick=importCSV;
-  $('downloadCsvTemplate').onclick=downloadImportTemplate;
-
-  async function showCsvPreview(forceToast){
-    const f=$('if').files[0];
-    if(!f){$('importFileInfo').textContent='No CSV selected.';$('importPreview').innerHTML='';if(forceToast)toast('Choose a CSV file first');return;}
-    try{
-      const rows=csvRows(await f.text());
-      if(!rows.length){$('importPreview').innerHTML='<div class="notice danger">The CSV is empty.</div>';return;}
-      const rawHead=rows[0].map(x=>String(x||'').trim());
-      const head=rawHead.map(x=>normalizeImportHeader(x));
-      const ni=findImportColumn(head,['patient_name','name','patient','patientname']);
-      const pi=findImportColumn(head,['phone','mobile','phone_number','mobile_number','contact','contact_number']);
-      $('importFileInfo').innerHTML=`Selected: <b>${esc(f.name)}</b> · ${rows.length-1} data row(s) · ${(f.size/1024).toFixed(1)} KB`;
-      if(ni<0||pi<0){$('importPreview').innerHTML='<div class="notice danger">CSV needs Patient Name and Phone columns.</div>';if(forceToast)toast('CSV needs name and phone');return;}
-      const sample=rows.slice(1,6).filter(r=>r.some(v=>String(v||'').trim()));
-      $('importPreview').innerHTML=`<div class="small muted" style="margin-bottom:8px">Detected columns: <b>${esc(rawHead.join(', '))}</b></div>`+
-        (sample.length?`<div class="table-wrap"><table><thead><tr><th>Patient Name</th><th>Phone</th><th>Hospital</th><th>Coupon</th></tr></thead><tbody>${sample.map(r=>`<tr><td>${esc(r[ni]||'')}</td><td>${esc(r[pi]||'')}</td><td>${esc(r[findImportColumn(head,['hospital','hospital_name'])]||'')}</td><td>${esc(r[findImportColumn(head,['coupon_code','coupon','promo_code'])]||'')}</td></tr>`).join('')}</tbody></table></div>`:'');
-      if(forceToast)toast(`CSV ready · ${rows.length-1} row(s)`);
-    }catch(e){console.error(e);$('importPreview').innerHTML='<div class="notice danger">Unable to read this CSV file.</div>';if(forceToast)toast('Unable to read CSV');}
-  }
-
-  function downloadImportTemplate(){
-    const header='patient_name,phone,alternate_phone,hospital,coupon_code,calling_status,opd_status,calling_date,visit,remarks,is_referral,referred_by';
-    const example='John Doe,9876543210,9988776655,Altius Hospitals,ORTHO20,not_called,not_discussed,2026-09-20,,Imported from CSV,no,';
-    const blob=new Blob([header+'\\n'+example+'\\n'],{type:'text/csv;charset=utf-8'});
-    const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='opd_crm_lead_import_template.csv';document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(a.href),500);
-  }
-}
-
-function normalizeImportHeader(x){return String(x||'').toLowerCase().trim().replace(/[\s-]+/g,'_').replace(/[^a-z0-9_]/g,'')}
-function findImportColumn(head,names){for(const n of names){const i=head.indexOf(n);if(i>=0)return i}return -1}
-function normalizeImportPhone(x){return String(x??'').replace(/\D/g,'').slice(-10)}
-function normalizeImportName(x){return String(x??'').trim().toLowerCase().replace(/\s+/g,' ')}
-function importEnumValue(value, allowed, fallback){
-  const raw=String(value??'').trim().toLowerCase();
-  if(!raw)return fallback;
-  if(allowed.includes(raw))return raw;
-  const map={
-    'not called':'not_called','connected':'connected','dnp':'dnp','busy':'busy','switched off':'switched_off','wrong number':'wrong_number','interested':'interested','not interested':'not_interested','follow up':'follow_up','follow-up':'follow_up','opd booked':'opd_booked','call back':'call_back',
-    'not discussed':'not_discussed','opd recommended':'opd_recommended','opd completed':'opd_completed','no show':'no_show','cancelled':'cancelled'
-  };
-  return map[raw]&&allowed.includes(map[raw])?map[raw]:fallback;
-}
-async function importCSV(){
-  const f=$('if').files[0],campaign_id=$('ic').value,source_id=$('is').value;
-  if(!f||!campaign_id||!source_id)return toast('Choose campaign, source and CSV');
-  if(!/\.csv$/i.test(f.name))return toast('Please select a CSV file');
-  const button=$('runCsvImport');
-  button.disabled=true;
-  button.textContent='Importing…';
-  try{
-    const rows=csvRows(await f.text());
-    if(!rows.length)throw new Error('CSV is empty');
-    const rawHead=rows.shift();
-    const head=rawHead.map(normalizeImportHeader);
-    const ni=findImportColumn(head,['patient_name','name','patient','patientname']);
-    const pi=findImportColumn(head,['phone','mobile','phone_number','mobile_number','contact','contact_number']);
-    if(ni<0||pi<0)throw new Error('CSV needs Patient Name and Phone columns');
-
-    const findCol=(names)=>findImportColumn(head,names);
-    const ai=findCol(['alternate_phone','alt_phone','alternate_mobile']);
-    const hi=findCol(['hospital','hospital_name']);
-    const coi=findCol(['coupon_code','coupon','promo_code']);
-    const si=findCol(['calling_status','call_status','status']);
-    const oi=findCol(['opd_status','opd']);
-    const di=findCol(['calling_date','call_date']);
-    const vi=findCol(['visit','visit_status']);
-    const ri=findCol(['remarks','comments','comment','notes']);
-    const refl=findCol(['is_referral','referral','referral_flag']);
-    const rby=findCol(['referred_by','referrer','referral_by']);
-
-    const existing=new Set((dbstate.leads||[]).filter(l=>l.campaign_id===campaign_id).map(l=>`${normalizeImportName(l.patient_name)}|${normalizeImportPhone(l.phone)}`));
-    const callers=(dbstate.callers||[]).filter(x=>x.is_active!==false);
-    const useRound=$('ia').value==='round';
-    const defaultHospital=$('iHospital').value.trim()||null;
-    const defaultCoupon=$('iCoupon').value.trim()||null;
-    let nextCaller=0,added=0,dup=0,invalid=0,failed=0;
-    const importBatch=Date.now();
-    const payload=[];
-    const seenInFile=new Set();
-    const allowedCalling=['not_called','connected','dnp','busy','switched_off','wrong_number','interested','not_interested','follow_up','opd_booked','call_back'];
-    const allowedOpd=['not_discussed','interested','opd_recommended','opd_booked','opd_completed','no_show','cancelled'];
-    const truthy=new Set(['yes','y','true','1']);
-
-    for(let idx=0;idx<rows.length;idx++){
-      const row=rows[idx];
-      const name=String(row[ni]||'').trim();
-      const phoneRaw=String(row[pi]||'').trim();
-      const phone=phoneRaw.replace(/\D/g,'');
-      const phoneKey=normalizeImportPhone(phone);
-      if(!name||phoneKey.length<10){invalid++;continue;}
-      const key=`${normalizeImportName(name)}|${phoneKey}`;
-      if(existing.has(key)||seenInFile.has(key)){dup++;continue;}
-      seenInFile.add(key);
-      let assigned_to=null;
-      if(useRound&&callers.length){assigned_to=callers[nextCaller%callers.length].id;nextCaller++;}
-      const hospital=hi>=0&&String(row[hi]||'').trim()?String(row[hi]).trim():defaultHospital;
-      const coupon_code=coi>=0&&String(row[coi]||'').trim()?String(row[coi]).trim():defaultCoupon;
-      const calling_status=importEnumValue(si>=0?row[si]:'',allowedCalling,'not_called');
-      const opd_status=importEnumValue(oi>=0?row[oi]:'',allowedOpd,'not_discussed');
-      const visit=vi>=0&&String(row[vi]||'').trim()?String(row[vi]).trim():null;
-      const is_referral=refl>=0?truthy.has(String(row[refl]||'').trim().toLowerCase()):false;
-      payload.push({
-        patient_name:name,
-        phone:phoneRaw,
-        alternate_phone:ai>=0&&String(row[ai]||'').trim()?String(row[ai]).trim():null,
-        source_id,
-        campaign_id,
-        assigned_to,
-        calling_status,
-        opd_status,
-        calling_date:di>=0&&String(row[di]||'').trim()?String(row[di]).trim():null,
-        visit,
-        remarks:ri>=0&&String(row[ri]||'').trim()?String(row[ri]).trim():null,
-        hospital,
-        coupon_code,
-        is_referral,
-        referred_by:rby>=0&&String(row[rby]||'').trim()?String(row[rby]).trim():null,
-        source_row_key:`csv:${campaign_id}:${source_id}:${importBatch}:${idx+2}`
-      });
-      existing.add(key);
-    }
-
-    for(let i=0;i<payload.length;i+=200){
-      const batch=payload.slice(i,i+200);
-      const r=await db.from('leads').insert(batch);
-      if(r.error){
-        console.error('CSV batch import failed:',r.error);
-        failed+=batch.length;
-      }else added+=batch.length;
-    }
-    await loadAll();
-    $('if').value='';
-    $('importFileInfo').textContent='No CSV selected.';
-    $('importPreview').innerHTML='';
-    toast(`Imported ${added} · duplicates skipped ${dup} · invalid ${invalid} · failed ${failed}`);
-  }catch(e){
-    console.error('CSV import failed:',e);
-    toast(e?.message||'CSV import failed');
-  }finally{
-    button.disabled=false;
-    button.textContent='📥 Import Leads';
-  }
-}
+function renderImport(){if(me.role!=='admin')return;$('content').innerHTML=`<div class="panel" style="margin-top:0"><div class="notice">CSV import is still available for one-off files. For live Meta / WhatsApp CTA / RCS / Hospital streams, use <b>Google Sheets</b> in the menu.</div><div class="modal-actions"><button class="btn primary" onclick="go('sheets')">Connect Google Sheet</button></div></div>`}
+function csvRows(t){let out=[],row=[],cell='',q=false;for(let i=0;i<t.length;i++){let ch=t[i],nx=t[i+1];if(ch==='"'&&nx==='"'){cell+='"';i++;continue}if(ch==='"'){q=!q;continue}if(ch===','&&!q){row.push(cell);cell='';continue}if((ch==='\n'||ch==='\r')&&!q){if(ch==='\r'&&nx==='\n')i++;row.push(cell);if(row.some(v=>v.trim()))out.push(row);row=[];cell='';continue}cell+=ch}if(cell||row.length){row.push(cell);out.push(row)}return out}
+async function importCSV(){let f=$('if').files[0],campaign_id=$('ic').value,source_id=$('is').value;if(!f||!campaign_id||!source_id)return toast('Choose campaign, source and CSV');let rows=csvRows(await f.text()),head=rows.shift().map(x=>x.trim().toLowerCase()),ni=head.indexOf('patient_name')>=0?head.indexOf('patient_name'):head.indexOf('name'),pi=head.indexOf('phone')>=0?head.indexOf('phone'):head.indexOf('mobile');if(ni<0||pi<0)return toast('CSV needs name and phone');let existing=new Set(dbstate.leads.map(l=>String(l.phone).replace(/\D/g,'').slice(-10))),ids=dbstate.callers.map(x=>x.id),added=0,dup=0,ci=0;for(let row of rows){let name=(row[ni]||'').trim(),phone=(row[pi]||'').replace(/\D/g,'');if(!name||!phone)continue;let key=phone.slice(-10);if(existing.has(key)){dup++;continue}existing.add(key);let assigned=$('ia').value==='round'?(ids[ci++%ids.length]||null):null;let r=await db.from('leads').insert({patient_name:name,phone,source_id,campaign_id,assigned_to:assigned});if(!r.error)added++}await loadLeads();toast(`Imported ${added} · duplicates skipped ${dup}`)}
 function renderSheets(){
   if(me.role!=='admin')return;
   let rows=dbstate.sheetConnections||[];
@@ -1715,7 +1534,7 @@ $('loginForm').addEventListener('submit',async e=>{
     }
 
     session=r.data.session;
-    await loadMe();
+    await loadMeWithRetry();
 
     try{
       await loadAll();
@@ -1732,12 +1551,24 @@ $('loginForm').addEventListener('submit',async e=>{
     if(btn){btn.disabled=false;btn.textContent='Sign in →';}
   }
 });
-$('logout').onclick=async()=>{await db.auth.signOut();location.reload()};
+$('logout').onclick=async()=>{await db.auth.signOut();currentPage='dashboard';};
 start().catch(e=>{
   console.error(e);
   $('app').classList.add('hidden');
   $('login').classList.remove('hidden');
   $('loginError').textContent=e?.message||'Unable to start CRM';
+});
+
+window.addEventListener('beforeunload',()=>{
+  if(!me)return;
+  try{
+    const p=currentPage;
+    if(p==='leads'&&$('q')){
+      writeAppState({page:'leads',leads:{q:$('q').value,fc:$('fc').value,fs:$('fs').value,fh:$('fh').value,fa:$('fa').value,fst:$('fst').value,fopd:$('fopd').value,fvisit:$('fvisit').value,fcdfrom:$('fcdfrom').value,fcdto:$('fcdto').value,pageSize:$('pageSize').value,page:leadPage}});
+    }else{
+      writeAppState({page:p});
+    }
+  }catch(_){}
 });
 
 </script>
