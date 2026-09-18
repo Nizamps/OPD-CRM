@@ -407,6 +407,7 @@ const STATUS={not_called:'Not Called',connected:'Connected',dnp:'DNP',busy:'Busy
 const OPD={not_discussed:'Not Discussed',interested:'Interested',opd_recommended:'OPD Recommended',opd_booked:'OPD Booked',opd_completed:'OPD Completed',no_show:'No Show',cancelled:'Cancelled'};
 let session=null,me=null,currentPage='dashboard',dbstate={campaigns:[],sources:[],callers:[],leads:[],sheetConnections:[],settings:{options:[],fields:[]},opdBookings:[],campaignHospitals:[]};
 const DEFAULT_HOSPITALS=['EHRC','Altius'];
+const AUTH_STORAGE_KEY='opd-crm-auth';
 const APP_STATE_PREFIX='opd-crm-view-v3:';
 function appStateKey(){return `${APP_STATE_PREFIX}${me?.id||'anonymous'}`;}
 function readAppState(){try{return JSON.parse(localStorage.getItem(appStateKey())||'{}')||{};}catch(_){return {};}}
@@ -418,50 +419,103 @@ const date=x=>x?new Date(x+'T00:00:00').toLocaleDateString('en-IN',{day:'2-digit
 const dt=x=>x?new Date(x).toLocaleString('en-IN',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'}):'';
 const toast=m=>{let t=$('toast');t.textContent=m;t.style.display='block';setTimeout(()=>t.style.display='none',2200)};
 const pill=s=>`<span class="pill ${['connected','opd_booked'].includes(s)?'success':s==='dnp'||s==='wrong_number'||s==='not_interested'?'danger':s==='follow_up'||s==='interested'?'warn':''}">${esc(settingLabel('calling_status',s,STATUS[s]||s))}</span>`;
+async function readPersistedSession(){
+  // Supabase normally restores this automatically from localStorage.
+  // The fallback below handles browsers/origins where the SDK returns null
+  // during the first page load even though the persisted refresh token exists.
+  let lastErr=null;
+  for(let i=0;i<3;i++){
+    try{
+      const r=await db.auth.getSession();
+      if(r?.data?.session)return r.data.session;
+      const raw=window.localStorage.getItem(AUTH_STORAGE_KEY);
+      if(raw){
+        const saved=JSON.parse(raw);
+        if(saved?.access_token&&saved?.refresh_token){
+          const sr=await db.auth.setSession({access_token:saved.access_token,refresh_token:saved.refresh_token});
+          if(sr?.data?.session)return sr.data.session;
+          if(sr?.error)lastErr=sr.error;
+        }
+      }
+    }catch(e){lastErr=e;}
+    await new Promise(r=>setTimeout(r,250*(i+1)));
+  }
+  if(lastErr)console.warn('Persisted session restore warning:',lastErr);
+  return null;
+}
+
 async function start(){
   if(!C.url||C.url.includes('YOUR_PROJECT')){
     $('login').classList.remove('hidden');
     return;
   }
 
-  try{
-    const s=await db.auth.getSession();
-    session=s.data?.session||null;
+  // Do not show the login screen while Supabase is still restoring the session.
+  $('login').classList.add('hidden');
+  $('app').classList.remove('hidden');
 
+  try{
+    session=await readPersistedSession();
     if(!session){
+      session=null;
+      me=null;
       $('app').classList.add('hidden');
       $('login').classList.remove('hidden');
       return;
     }
 
-    // A valid Supabase session is enough to keep the user in the app.
-    // Profile/data loading errors must not force a re-login.
-    await loadMeWithRetry();
-    await loadAll();
+    // IMPORTANT: database/profile errors are never treated as auth failures.
+    // Only an actual missing/invalid auth session should return to login.
+    try{
+      await loadMeWithRetry();
+    }catch(profileErr){
+      console.error('Profile restore failed:',profileErr);
+      // Safe fallback: caller-level shell only; RLS still protects the data.
+      me={id:session.user.id,full_name:session.user.user_metadata?.full_name||session.user.email||'User',role:'caller',is_active:true};
+      toast('Session restored. Profile is still loading.');
+    }
+
+    try{
+      await loadAll();
+    }catch(dataErr){
+      console.error('CRM data restore failed:',dataErr);
+      // Keep the session and current app shell. Data will retry in the background.
+      toast('CRM data is loading…');
+    }
+
     showApp();
   }catch(e){
     console.error('CRM startup/session restore failed:',e);
+    // Only return to login when there is genuinely no restorable session.
     if(session){
-      // Keep the existing session visible when data loading has a transient failure.
       $('login').classList.add('hidden');
       $('app').classList.remove('hidden');
-      if(me){showApp();toast('Some CRM data could not be loaded.');return;}
+      if(!me)me={id:session.user.id,full_name:session.user.user_metadata?.full_name||session.user.email||'User',role:'caller',is_active:true};
+      showApp();
+      toast('Session restored.');
+      return;
     }
-    session=null;
-    me=null;
     $('app').classList.add('hidden');
     $('login').classList.remove('hidden');
     const er=$('loginError');
     if(er) er.textContent=e?.message||'Unable to restore your session';
   }
 }
+
 db.auth.onAuthStateChange((event,newSession)=>{
+  // Do not interpret TOKEN_REFRESHED, INITIAL_SESSION or USER_UPDATED as logout.
   if(event==='SIGNED_OUT'){
     session=null;me=null;currentPage='dashboard';
     $('app').classList.add('hidden');
     $('login').classList.remove('hidden');
-  }else if(newSession){
+    return;
+  }
+  if(newSession){
     session=newSession;
+    // Persist the freshest session explicitly as an extra safety net.
+    try{
+      window.localStorage.setItem(AUTH_STORAGE_KEY,JSON.stringify(newSession));
+    }catch(_){}
   }
 });
 setInterval(async()=>{
@@ -1554,9 +1608,24 @@ $('loginForm').addEventListener('submit',async e=>{
 $('logout').onclick=async()=>{await db.auth.signOut();currentPage='dashboard';};
 start().catch(e=>{
   console.error(e);
-  $('app').classList.add('hidden');
-  $('login').classList.remove('hidden');
-  $('loginError').textContent=e?.message||'Unable to start CRM';
+  if(session){
+    $('login').classList.add('hidden');
+    $('app').classList.remove('hidden');
+    if(!me)me={id:session.user.id,full_name:session.user.user_metadata?.full_name||session.user.email||'User',role:'caller',is_active:true};
+    showApp();
+  }else{
+    $('app').classList.add('hidden');
+    $('login').classList.remove('hidden');
+    $('loginError').textContent=e?.message||'Unable to start CRM';
+  }
+});
+
+window.addEventListener('pageshow',()=>{
+  if(session&&!me){
+    readPersistedSession().then(s=>{
+      if(s){session=s;loadMeWithRetry().then(()=>loadAll()).then(()=>showApp()).catch(()=>{});}
+    }).catch(()=>{});
+  }
 });
 
 window.addEventListener('beforeunload',()=>{
