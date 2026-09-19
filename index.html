@@ -625,7 +625,7 @@ async function loadAll(){
   if(optRes.error)console.warn('Dropdown options load:',optRes.error.message);
   if(fieldRes.error)console.warn('Custom fields load:',fieldRes.error.message);
   if(me.role==='admin'&&sheetRes?.error)console.warn('Sheet connections load:',sheetRes.error.message);
-  await loadBookings();
+  dbstate.opdBookings=dbstate.opdBookings||[];
   refreshPendingBadge();
 }
 async function loadBookings(){
@@ -654,12 +654,69 @@ async function loadLeads(){
   }
   dbstate.leads=all;
 }
-async function refreshLeadData({bookings=false}={}){
-  await loadLeads();
-  if(bookings)await loadBookings();
-  refreshPendingBadge();
-  if(currentPage==='leads'&&$('leadTable'))updateLeads();
-  if(currentPage==='dashboard'&&$('dashBody'))renderDashboardBody();
+
+const LEAD_SELECT='id,lead_number,patient_name,phone,alternate_phone,source_id,campaign_id,assigned_to,calling_status,opd_status,follow_up_date,follow_up_time,remarks,created_at,updated_at,normalized_phone,source_row_key,calling_date,visit,custom_data,is_referral,referred_by,hospital,coupon_code,campaign:campaigns(id,name,campaign_date),source:lead_sources(id,name),assignee:profiles!leads_assigned_to_fkey(id,full_name)';
+
+async function fetchLeadById(id){
+  const r=await db.from('leads').select(LEAD_SELECT).eq('id',id).single();
+  if(r.error)throw r.error;
+  return r.data;
+}
+
+async function refreshLeadInState(id){
+  try{
+    const row=await fetchLeadById(id);
+    const idx=dbstate.leads.findIndex(x=>x.id===id);
+    if(me.role!=='admin' && row.assigned_to!==me.id){
+      if(idx>=0)dbstate.leads.splice(idx,1);
+      return null;
+    }
+    if(idx>=0)dbstate.leads[idx]=row;
+    else dbstate.leads.unshift(row);
+    refreshPendingBadge();
+    if(currentPage==='leads'&&$('leadTable'))updateLeads();
+    if(currentPage==='dashboard'&&$('dashBody'))renderDashboardBody();
+    return row;
+  }catch(e){
+    console.warn('Targeted lead refresh failed:',e);
+    return null;
+  }
+}
+
+async function refreshBookingsForLead(leadId){
+  const q=await db.from('opd_bookings')
+    .select('id,lead_id,campaign_id,booking_date,doctor_name,department,hospital_name,booking_status,notes,created_by,created_at,campaign:campaigns(name,campaign_date)')
+    .eq('lead_id',leadId)
+    .order('created_at',{ascending:false});
+  if(q.error)throw q.error;
+  const keep=(dbstate.opdBookings||[]).filter(b=>b.lead_id!==leadId);
+  dbstate.opdBookings=[...keep,...(q.data||[])];
+  return q.data||[];
+}
+
+let backgroundRefreshTimer=null;
+function scheduleBackgroundLeadRefresh(delay=2500){
+  clearTimeout(backgroundRefreshTimer);
+  backgroundRefreshTimer=setTimeout(async()=>{
+    try{
+      await loadLeads();
+      refreshPendingBadge();
+      if(currentPage==='leads'&&$('leadTable'))updateLeads();
+      if(currentPage==='dashboard'&&$('dashBody'))renderDashboardBody();
+    }catch(e){console.warn('Background lead refresh failed:',e);}
+  },delay);
+}
+async function refreshLeadData({leadId=null,bookings=false}={}){
+  if(leadId){
+    await refreshLeadInState(leadId);
+    if(bookings)await refreshBookingsForLead(leadId);
+  }else{
+    await loadLeads();
+    if(bookings)await loadBookings();
+    refreshPendingBadge();
+    if(currentPage==='leads'&&$('leadTable'))updateLeads();
+    if(currentPage==='dashboard'&&$('dashBody'))renderDashboardBody();
+  }
 }
 function showApp(){
   $('login').classList.add('hidden');
@@ -892,14 +949,48 @@ function updateLeads(){
   let hs=$('headerSelect');if(hs)hs.onchange=()=>{let checked=hs.checked,x=getFilteredLeads(),ps=Number($('pageSize').value||100),rows=x.slice((leadPage-1)*ps,(leadPage-1)*ps+ps);rows.forEach(l=>checked?leadSelected.add(l.id):leadSelected.delete(l.id));document.querySelectorAll('.lead-row-check').forEach(c=>c.checked=checked);if($('selectAllPage'))$('selectAllPage').checked=checked;updateSelectedCount()};
   renderPagination(x.length,ps);syncSelectAllPage();updateSelectedCount();refreshPendingBadge();
 }
-async function bulkAssignSelected(){if(me.role!=='admin')return;if(!leadSelected.size)return toast('Select at least one lead');const target=$('bulkAssignee').value;if(!target)return toast('Choose a caller or Unassign selected');const ids=Array.from(leadSelected),assigned_to=target==='__unassigned__'?null:target,callerName=target==='__unassigned__'?'Unassigned':(dbstate.callers.find(u=>u.id===target)?.full_name||'caller');if(!confirm(`Assign ${ids.length} lead${ids.length===1?'':'s'} to ${callerName}?`))return;const u=await db.from('leads').update({assigned_to,updated_at:new Date().toISOString()}).in('id',ids);if(u.error)return toast(u.error.message);if(assigned_to){const ar=await db.from('lead_assignments').insert(ids.map(id=>({lead_id:id,assigned_to,assigned_by:me.id})));if(ar.error)console.warn('Assignment history insert failed:',ar.error)}clearLeadSelection();$('bulkAssignee').value='';await refreshLeadData();toast(`${ids.length} lead${ids.length===1?'':'s'} assigned`)}
+async function bulkAssignSelected(){
+  if(me.role!=='admin')return;
+  if(!leadSelected.size)return toast('Select at least one lead');
+  const target=$('bulkAssignee').value;
+  if(!target)return toast('Choose a caller or Unassign selected');
+  const ids=Array.from(leadSelected);
+  const assigned_to=target==='__unassigned__'?null:target;
+  const caller=dbstate.callers.find(u=>u.id===target);
+  const callerName=target==='__unassigned__'?'Unassigned':(caller?.full_name||'caller');
+  if(!confirm(`Assign ${ids.length} lead${ids.length===1?'':'s'} to ${callerName}?`))return;
+
+  const now=new Date().toISOString();
+  const u=await db.from('leads').update({assigned_to,updated_at:now}).in('id',ids);
+  if(u.error)return toast(u.error.message);
+
+  const assignee=assigned_to?{id:assigned_to,full_name:callerName}:null;
+  dbstate.leads.forEach(l=>{
+    if(ids.includes(l.id)){
+      l.assigned_to=assigned_to;
+      l.assignee=assignee;
+      l.updated_at=now;
+    }
+  });
+  if(assigned_to){
+    db.from('lead_assignments').insert(ids.map(id=>({lead_id:id,assigned_to,assigned_by:me.id}))).then(ar=>{
+      if(ar.error)console.warn('Assignment history insert failed:',ar.error.message);
+    });
+  }
+  clearLeadSelection();
+  $('bulkAssignee').value='';
+  updateLeads();
+  refreshPendingBadge();
+  toast(`${ids.length} lead${ids.length===1?'':'s'} assigned`);
+  scheduleBackgroundLeadRefresh(4000);
+}
 async function openLead(id){
   captureLeadFilterState();
   let l=dbstate.leads.find(x=>x.id===id);
   if(!l)return;
 
   let logs=(await db.from('call_logs').select('*, caller:profiles(full_name)').eq('lead_id',id).order('called_at',{ascending:false})).data||[];
-  let bookings=(dbstate.opdBookings||[]).filter(b=>b.lead_id===id);
+  let bookings=await refreshBookingsForLead(id);
 
   $('modal').innerHTML=`<div class="modal-box">
     <div class="panel-head">
@@ -957,7 +1048,8 @@ async function openLead(id){
   });
 }
 
-function openAddBooking(l){
+async function openAddBooking(l){
+  try{await refreshBookingsForLead(l.id);}catch(e){console.warn('Booking refresh failed:',e);}
   const existingCampaign=dbstate.campaigns.find(c=>c.id===l.campaign_id);
   $('modal2').innerHTML=`<div class="modal-box" style="max-width:620px">
     <div class="panel-head"><div><h2 style="margin:0">Add OPD Booking</h2><div class="small muted">${esc(l.patient_name)} · ${esc(l.phone)}</div></div><button class="btn secondary" id="bookingClose">Close</button></div>
@@ -999,15 +1091,19 @@ function openAddBooking(l){
       booking_status:$('bStatus').value,
       notes:$('bNotes').value.trim()||null,
       created_by:me.id
-    }).select().single();
+    }).select('id,lead_id,campaign_id,booking_date,doctor_name,department,hospital_name,booking_status,notes,created_by,created_at,campaign:campaigns(name,campaign_date)').single();
     if(r.error)return toast(r.error.message);
-    // Keep lead status in sync.
-    await db.from('leads').update({opd_status:'opd_booked',updated_at:new Date().toISOString()}).eq('id',l.id);
+    const leadPatch={opd_status:'opd_booked',updated_at:new Date().toISOString()};
+    const leadWrite=db.from('leads').update(leadPatch).eq('id',l.id);
+    if(r.data)dbstate.opdBookings=[r.data,...(dbstate.opdBookings||[]).filter(b=>b.id!==r.data.id)];
+    Object.assign(l,leadPatch);
     $('modal2').classList.add('hidden');
-    await refreshLeadData({bookings:true});
     closeModal();
-    go('leads');
+    if(currentPage==='leads'&&$('leadTable'))updateLeads();
+    if(currentPage==='dashboard'&&$('dashBody'))renderDashboardBody();
     toast('OPD booking added');
+    leadWrite.then(x=>{if(x.error)console.warn('Lead OPD status update failed:',x.error.message);});
+    scheduleBackgroundLeadRefresh(4000);
   };
 }
 function openNewLead(){
@@ -1063,14 +1159,15 @@ async function saveNewLead(){
   if(!hospital && mappedHospitals.length===1)hospital=mappedHospitals[0];
   if(!coupon_code)coupon_code=selectedCampaign?.coupon_code||null;
 
-  let assigned=me.role==='admin'?($('na')?.value||null):me.id;
+  const assigned=me.role==='admin'?($('na')?.value||null):me.id;
   const calling_status=$('nst').value;
   const opd_status=$('no').value;
+  const calling_date=$('ncalld').value||null;
   const follow_up_date=$('nfd').value||null;
   const follow_up_time=$('nft').value||null;
+  const visit=$('nv').value||null;
   const remarks=$('nr').value.trim()||null;
 
-  // First inspect existing leads with the same phone in this campaign.
   const existingRes=await db.from('leads')
     .select('*, campaign:campaigns(name,campaign_date), source:lead_sources(name), assignee:profiles!leads_assigned_to_fkey(full_name)')
     .eq('campaign_id',campaign_id)
@@ -1079,9 +1176,6 @@ async function saveNewLead(){
   if(existingRes.error)return toast(existingRes.error.message);
 
   const existingLeads=existingRes.data||[];
-
-  // Same number is allowed for multiple people (e.g. husband + wife).
-  // Only treat it as a duplicate when the patient name is the same.
   const samePerson=existingLeads.find(x=>
     String(x.patient_name||'').trim().toLowerCase()===name.toLowerCase()
   );
@@ -1091,78 +1185,192 @@ async function saveNewLead(){
     return;
   }
 
-  let leadId=null;
-
-  // Direct insert keeps manual caller entry independent of any older RPC version.
-  // The RLS policy limits callers to creating leads assigned to themselves.
   let custom_data={};
   (dbstate.settings.fields||[]).forEach(f=>{
     const el=$('ncf_'+f.field_key);
     if(el)custom_data[f.field_key]=el.value||null;
   });
 
-  const ins=await db.from('leads').insert({
-    patient_name:name, phone, source_id, campaign_id, assigned_to:assigned,
-    calling_status, opd_status, follow_up_date, follow_up_time, remarks, hospital,
-    coupon_code, is_referral, referred_by, custom_data
-  }).select('id').single();
+  const insertPayload={
+    patient_name:name,
+    phone,
+    source_id,
+    campaign_id,
+    assigned_to:assigned,
+    calling_status,
+    opd_status,
+    calling_date,
+    visit,
+    follow_up_date,
+    follow_up_time,
+    remarks,
+    hospital,
+    coupon_code,
+    is_referral,
+    referred_by,
+    custom_data
+  };
+
+  const ins=await db.from('leads').insert(insertPayload).select(LEAD_SELECT).single();
 
   if(ins.error){
     if(/duplicate|unique/i.test(ins.error.message||''))
       return toast('This phone number is already used for this campaign.');
     return toast(ins.error.message);
   }
-  leadId=ins.data?.id||null;
 
-  if(!leadId)return toast('Lead could not be created');
+  const newLead=ins.data;
+  if(!newLead)return toast('Lead could not be created');
 
-  const referralPatch={
-    is_referral,
-    referred_by,
-    updated_at:new Date().toISOString()
-  };
-  const rr=await db.from('leads').update(referralPatch).eq('id',leadId);
-  if(rr.error)return toast('Lead created, but referral details could not be saved: '+rr.error.message);
-
-  if(assigned){
-    const ar=await db.from('lead_assignments').insert({
-      lead_id:leadId,
-      assigned_to:assigned,
-      assigned_by:me.id
-    });
-    if(ar.error)console.warn('Assignment history insert failed:',ar.error.message);
+  // Optimistic/local state update: no full CRM reload on save.
+  if(me.role==='admin' || newLead.assigned_to===me.id){
+    dbstate.leads=[newLead,...dbstate.leads];
   }
 
-  if(calling_status!=='not_called'){
-    const cr=await db.from('call_logs').insert({
-      lead_id:leadId,
-      caller_id:me.id,
-      calling_status,
-      remarks
-    });
-    if(cr.error)console.warn('Call log insert failed:',cr.error.message);
-  }
-
-  if(calling_status==='follow_up'){
-    const fr=await db.from('follow_ups').insert({
-      lead_id:leadId,
-      assigned_to:assigned||me.id,
-      follow_up_date:follow_up_date||new Date().toISOString().slice(0,10),
-      follow_up_time,
-      notes:remarks
-    });
-    if(fr.error)console.warn('Follow-up insert failed:',fr.error.message);
-  }
-
-  await loadAll();
   closeModal();
-  go('leads');
+  if(currentPage==='leads'){
+    updateLeads();
+  }else{
+    go('leads');
+  }
+  refreshPendingBadge();
   toast(existingLeads.length
     ? `Lead added — shared phone number allowed for ${name}`
     : 'New lead added');
+
+  // Secondary history records should never delay the UI.
+  const backgroundOps=[];
+  if(assigned){
+    backgroundOps.push(
+      db.from('lead_assignments').insert({
+        lead_id:newLead.id,
+        assigned_to:assigned,
+        assigned_by:me.id
+      })
+    );
+  }
+  if(calling_status!=='not_called'){
+    backgroundOps.push(
+      db.from('call_logs').insert({
+        lead_id:newLead.id,
+        caller_id:me.id,
+        calling_status,
+        remarks
+      })
+    );
+  }
+  if(calling_status==='follow_up'){
+    backgroundOps.push(
+      db.from('follow_ups').insert({
+        lead_id:newLead.id,
+        assigned_to:assigned||me.id,
+        follow_up_date:follow_up_date||new Date().toISOString().slice(0,10),
+        follow_up_time,
+        notes:remarks
+      })
+    );
+  }
+
+  if(backgroundOps.length){
+    Promise.allSettled(backgroundOps).then(results=>{
+      results.forEach(x=>{
+        if(x.status==='fulfilled' && x.value?.error)console.warn('Background lead history write failed:',x.value.error.message);
+        if(x.status==='rejected')console.warn('Background lead history write failed:',x.reason);
+      });
+    });
+  }
+
+  scheduleBackgroundLeadRefresh(4000);
 }
+
 function closeModal(){$('modal').classList.add('hidden')}
-async function saveLead(l){let custom_data={...(l.custom_data||{})};(dbstate.settings.fields||[]).forEach(f=>{const el=$('cf_'+f.field_key);if(el)custom_data[f.field_key]=el.value||null});let patch={patient_name:$('pn').value.trim(),phone:$('ph').value.trim(),campaign_id:$('c').value,source_id:$('src').value,calling_status:$('s').value,opd_status:$('o').value,calling_date:$('calld').value||null,visit:$('v').value||null,follow_up_date:$('fd').value||null,follow_up_time:$('ft').value||null,remarks:$('r').value.trim()||null,hospital:$('h').value||null,coupon_code:$('cc').value.trim()||null,is_referral:$('referralType').value==='yes',referred_by:$('referredBy').value.trim()||null,custom_data,updated_at:new Date().toISOString()};if(!patch.patient_name||!patch.phone||!patch.campaign_id||!patch.source_id)return toast('Name, phone, campaign and source are required');if(me.role==='admin')patch.assigned_to=$('a').value||null;let u=await db.from('leads').update(patch).eq('id',l.id);if(u.error)return toast(u.error.message);await db.from('call_logs').insert({lead_id:l.id,caller_id:me.id,calling_status:patch.calling_status,remarks:patch.remarks});if(patch.calling_status==='follow_up')await db.from('follow_ups').insert({lead_id:l.id,assigned_to:patch.assigned_to||l.assigned_to||me.id,follow_up_date:patch.follow_up_date||new Date().toISOString().slice(0,10),follow_up_time:patch.follow_up_time,notes:patch.remarks});await refreshLeadData({bookings:true});closeModal();go('leads');toast('Lead updated')}
+async function saveLead(l){
+  let custom_data={...(l.custom_data||{})};
+  (dbstate.settings.fields||[]).forEach(f=>{
+    const el=$('cf_'+f.field_key);
+    if(el)custom_data[f.field_key]=el.value||null;
+  });
+
+  let patch={
+    patient_name:$('pn').value.trim(),
+    phone:$('ph').value.trim(),
+    campaign_id:$('c').value,
+    source_id:$('src').value,
+    calling_status:$('s').value,
+    opd_status:$('o').value,
+    calling_date:$('calld').value||null,
+    visit:$('v').value||null,
+    follow_up_date:$('fd').value||null,
+    follow_up_time:$('ft').value||null,
+    remarks:$('r').value.trim()||null,
+    hospital:$('h').value||null,
+    coupon_code:$('cc').value.trim()||null,
+    is_referral:$('referralType').value==='yes',
+    referred_by:$('referredBy').value.trim()||null,
+    custom_data,
+    updated_at:new Date().toISOString()
+  };
+
+  if(!patch.patient_name||!patch.phone||!patch.campaign_id||!patch.source_id)
+    return toast('Name, phone, campaign and source are required');
+
+  if(me.role==='admin')patch.assigned_to=$('a').value||null;
+
+  // The lead update is the only awaited database operation on Save.
+  // Everything else happens in the background.
+  const u=await db.from('leads').update(patch).eq('id',l.id);
+  if(u.error)return toast(u.error.message);
+
+  // Update the in-memory lead immediately so the table/dashboard repaint
+  // without downloading the whole CRM again.
+  const campaign=dbstate.campaigns.find(c=>c.id===patch.campaign_id);
+  const source=dbstate.sources.find(s=>s.id===patch.source_id);
+  const assigneeId=me.role==='admin'?patch.assigned_to:l.assigned_to;
+  const assignee=dbstate.callers.find(x=>x.id===assigneeId)||l.assignee||null;
+
+  Object.assign(l,patch,{
+    campaign,
+    source,
+    assignee
+  });
+
+  closeModal();
+  if(currentPage==='leads'&&$('leadTable'))updateLeads();
+  if(currentPage==='dashboard'&&$('dashBody'))renderDashboardBody();
+  refreshPendingBadge();
+  toast('Lead updated');
+
+  const historyOps=[
+    db.from('call_logs').insert({
+      lead_id:l.id,
+      caller_id:me.id,
+      calling_status:patch.calling_status,
+      remarks:patch.remarks
+    })
+  ];
+
+  if(patch.calling_status==='follow_up'){
+    historyOps.push(
+      db.from('follow_ups').insert({
+        lead_id:l.id,
+        assigned_to:patch.assigned_to||l.assigned_to||me.id,
+        follow_up_date:patch.follow_up_date||new Date().toISOString().slice(0,10),
+        follow_up_time:patch.follow_up_time,
+        notes:patch.remarks
+      })
+    );
+  }
+
+  Promise.allSettled(historyOps).then(results=>{
+    results.forEach(x=>{
+      if(x.status==='fulfilled' && x.value?.error)console.warn('Background history write failed:',x.value.error.message);
+      if(x.status==='rejected')console.warn('Background history write failed:',x.reason);
+    });
+  });
+
+  scheduleBackgroundLeadRefresh(4000);
+}
+
 function uniqueCampaigns(){
   const grouped=new Map();
   for(const c of dbstate.campaigns){
@@ -1653,7 +1861,30 @@ async function saveSheetConnection(existingId=null){
   if(r.error)return toast(r.error.message);
   await loadAll();closeModal();renderSheets();toast('Google Sheet connected. New leads will sync automatically');
 }
-async function syncSheetNow(id){if(!GOOGLE_SYNC_URL)return toast('Set googleSyncUrl first');try{let r=await fetch(GOOGLE_SYNC_URL,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'sync',connection_id:id})});let t=await r.text();let j={};try{j=JSON.parse(t)}catch(_){};if(!r.ok||j.ok===false)return toast(j.error||j.message||('Sync failed (HTTP '+r.status+')'));toast(j.message||('Sync complete: '+(j.inserted??0)+' inserted'));setTimeout(async()=>{await loadAll();renderSheets()},800)}catch(e){toast('Sync request failed: '+(e.message||e))}}
+async function syncSheetNow(id){
+  if(!GOOGLE_SYNC_URL)return toast('Set googleSyncUrl first');
+  try{
+    let r=await fetch(GOOGLE_SYNC_URL,{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({action:'sync',connection_id:id})
+    });
+    let t=await r.text();
+    let j={};
+    try{j=JSON.parse(t)}catch(_){}
+    if(!r.ok||j.ok===false)return toast(j.error||j.message||('Sync failed (HTTP '+r.status+')'));
+    toast(j.message||('Sync complete: '+(j.inserted??0)+' inserted'));
+    setTimeout(async()=>{
+      try{
+        await loadLeads();
+        refreshPendingBadge();
+        renderSheets();
+      }catch(e){console.warn('Post-sync lead refresh failed:',e);}
+    },800);
+  }catch(e){
+    toast('Sync request failed: '+(e.message||e));
+  }
+}
 function renderExport(){if(me.role!=='admin'){ $('content').innerHTML='<div class="notice">Export is available to Admin only.</div>';return}$('content').innerHTML=`<div class="panel" style="margin-top:0"><div class="form-grid"><label>Campaign<select id="ec"><option value="">All campaigns</option>${uniqueCampaigns().map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select></label><label>Source<select id="es"><option value="">All sources</option>${dbstate.sources.map(s=>`<option value="${s.id}">${esc(s.name)}</option>`).join('')}</select></label><label>Assigned To<select id="ea"><option value="">All callers</option><option value="__unassigned__">Unassigned</option>${dbstate.callers.map(u=>`<option value="${u.id}">${esc(u.full_name)}</option>`).join('')}</select></label><label>Calling Status<select id="est"><option value="">All calling statuses</option>${Object.entries(STATUS).filter(([k])=>k!=='opd_booked').map(([k,v])=>`<option value="${k}">${v}</option>`).join('')}</select></label><label>OPD Status<select id="eopd"><option value="">All OPD statuses</option>${Object.entries(OPD).map(([k,v])=>`<option value="${k}">${v}</option>`).join('')}</select></label><label>Campaign Date From<input id="edfrom" type="date"></label><label>Campaign Date To<input id="edto" type="date"></label></div><div class="modal-actions"><button class="btn secondary" id="ep">Preview Count</button><button class="btn primary" id="ex">Export CSV</button></div><div id="ecount" style="margin-top:14px"></div></div>`;$('ep').onclick=previewExport;$('ex').onclick=doExport}
 function filtered(){let c=$('ec').value,s=$('es').value,a=$('ea').value,st=$('est').value,opd=$('eopd').value,df=$('edfrom').value,dt=$('edto').value;if(df&&dt&&df>dt){$('ecount').innerHTML='<div class="notice" style="background:#fff0f2;color:#b42335;border-color:#f5cbd1">From date cannot be after To date.</div>';return []}return dbstate.leads.filter(l=>{let cd=l.campaign?.campaign_date||'';return (!c||sameCampaignName(l,c))&&(!s||l.source_id===s)&&(!a||(a==='__unassigned__'?!l.assigned_to:l.assigned_to===a))&&(!st||l.calling_status===st)&&(!opd||l.opd_status===opd)&&(!df||cd>=df)&&(!dt||cd<=dt)})}
 function previewExport(){let x=filtered();if($('edfrom').value&&$('edto').value&&$('edfrom').value>$('edto').value)return;$('ecount').innerHTML=`<div class="notice">${x.length} lead${x.length===1?'':'s'} match the selected filters.</div>`}
